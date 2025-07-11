@@ -98,6 +98,49 @@ void ExitStatementCache(void){
 	}
 }
 
+// TransactionScope
+//==============================================================================
+TransactionScope::TransactionScope(const char *Context){
+	m_Context = (Context != NULL ? Context : "NOCONTEXT");
+	m_Running = false;
+}
+
+TransactionScope::~TransactionScope(void){
+	if(m_Running && !ExecInternal("ROLLBACK")){
+		LOG_ERR("Failed to rollback transaction (%s)", m_Context);
+	}
+}
+
+bool TransactionScope::Begin(void){
+	if(m_Running){
+		LOG_ERR("Transaction (%s) already running", m_Context);
+		return false;
+	}
+
+	if(!ExecInternal("BEGIN")){
+		LOG_ERR("Failed to begin transaction (%s)", m_Context);
+		return false;
+	}
+
+	m_Running = true;
+	return true;
+}
+
+bool TransactionScope::Commit(void){
+	if(!m_Running){
+		LOG_ERR("Transaction (%s) not running", m_Context);
+		return false;
+	}
+
+	if(!ExecInternal("COMMIT")){
+		LOG_ERR("Failed to commit transaction (%s)", m_Context);
+		return false;
+	}
+
+	m_Running = false;
+	return true;
+}
+
 // Queries
 //==============================================================================
 bool LoadWorldID(const char *WorldName, int *WorldID){
@@ -467,7 +510,6 @@ bool ExecFile(const char *FileName){
 	return Result;
 }
 
-bool ExecInternal(const char *Format, ...) ATTR_PRINTF(1, 2);
 bool ExecInternal(const char *Format, ...){
 	va_list ap;
 	va_start(ap, Format);
@@ -510,38 +552,31 @@ bool GetPragmaInt(const char *Name, int *OutValue){
 }
 
 bool InitDatabaseSchema(void){
-	bool Result = true;
-
-	if(Result && !ExecInternal("BEGIN")){
-		LOG_ERR("Failed to start schema transaction");
-		Result = false;
+	TransactionScope Tx("SchemaInit");
+	if(!Tx.Begin()){
+		return false;
 	}
 
-	if(Result && !ExecFile("sql/schema.sql")){
+	if(!ExecFile("sql/schema.sql")){
 		LOG_ERR("Failed to execute \"sql/schema.sql\"");
-		Result = false;
+		return false;
 	}
 
-	if(Result && !ExecInternal("PRAGMA application_id = %d", g_ApplicationID)){
+	if(!ExecInternal("PRAGMA application_id = %d", g_ApplicationID)){
 		LOG_ERR("Failed to set application id");
-		Result = false;
+		return false;
 	}
 
-	if(Result && !ExecInternal("PRAGMA user_version = 1")){
+	if(!ExecInternal("PRAGMA user_version = 1")){
 		LOG_ERR("Failed to set user version");
-		Result = false;
+		return false;
 	}
 
-	if(Result && !ExecInternal("COMMIT")){
-		LOG_ERR("Failed to commit schema transaction");
-		Result = false;
+	if(!Tx.Commit()){
+		return false;
 	}
 
-	if(!Result && !ExecInternal("ROLLBACK")){
-		LOG_ERR("Failed to rollback schema transaction");
-	}
-
-	return Result;
+	return true;
 }
 
 bool UpgradeDatabaseSchema(int UserVersion){
@@ -556,40 +591,34 @@ bool UpgradeDatabaseSchema(int UserVersion){
 		}
 	}
 
-	bool Result = true;
 	if(UserVersion != NewVersion){
 		LOG("Upgrading database schema to version %d", NewVersion);
 
-		if(Result && !ExecInternal("BEGIN")){
-			LOG_ERR("Failed to start upgrade transaction");
-			Result = false;
+		TransactionScope Tx("SchemaUpgrade");
+		if(!Tx.Begin()){
+			return false;
 		}
 
-		while(Result && UserVersion < NewVersion){
+		while(UserVersion < NewVersion){
 			snprintf(FileName, sizeof(FileName), "upgrade-%d.sql", UserVersion);
 			if(!ExecFile(FileName)){
 				LOG_ERR("Failed to execute \"%s\"", FileName);
-				Result = false;
+				return false;
 			}
 			UserVersion += 1;
 		}
 
-		if(Result && !ExecInternal("PRAGMA user_version = %d", UserVersion)){
+		if(!ExecInternal("PRAGMA user_version = %d", UserVersion)){
 			LOG_ERR("Failed to set user version");
-			Result = false;
+			return false;
 		}
 
-		if(Result && !ExecInternal("COMMIT")){
-			LOG_ERR("Failed to commit upgrade transaction");
-			Result = false;
-		}
-
-		if(!Result && !ExecInternal("ROLLBACK")){
-			LOG_ERR("Failed to rollback upgrade transaction");
+		if(!Tx.Commit()){
+			return false;
 		}
 	}
 
-	return Result;
+	return true;
 }
 
 bool CheckDatabaseSchema(void){

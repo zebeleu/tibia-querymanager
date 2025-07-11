@@ -623,9 +623,11 @@ void ProcessInsertHousesQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
-	// TODO(fusion): Have some TransactionGuard type that will either commit or
-	// rollback a transaction when we leave its scope, based on whether some
-	// `Commit` function was called.
+	TransactionScope Tx("UpdateHouses");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
 
 	if(!DeleteHouses(Connection->WorldID)){
 		SendQueryStatusFailed(Connection);
@@ -654,6 +656,11 @@ void ProcessInsertHousesQuery(TConnection *Connection, TReadBuffer *Buffer){
 		}
 	}
 
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
 	SendQueryStatusOk(Connection);
 }
 
@@ -680,9 +687,12 @@ void ProcessCreatePlayerlistQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
-	// TODO(fusion): Have some TransactionGuard type that will either commit or
-	// rollback a transaction when we leave its scope, based on whether some
-	// `Commit` function was called.
+
+	TransactionScope Tx("OnlineList");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
 
 	if(!DeleteOnlineCharacters(Connection->WorldID)){
 		SendQueryStatusFailed(Connection);
@@ -708,6 +718,11 @@ void ProcessCreatePlayerlistQuery(TConnection *Connection, TReadBuffer *Buffer){
 			SendQueryStatusFailed(Connection);
 			return;
 		}
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
 	}
 
 	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);

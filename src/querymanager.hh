@@ -688,6 +688,18 @@ struct TWorldConfig{
 	int PremiumNewbieBuffer;
 };
 
+struct TransactionScope{
+private:
+	const char *m_Context;
+	bool m_Running;
+
+public:
+	TransactionScope(const char *Context);
+	~TransactionScope(void);
+	bool Begin(void);
+	bool Commit(void);
+};
+
 bool LoadWorldID(const char *WorldName, int *WorldID);
 //bool DecrementIsOnline(int WorldID, int CharacterID);
 bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *HouseOwners);
@@ -701,6 +713,13 @@ bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
 		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
 bool LoadWorldConfig(int WorldID, TWorldConfig *WorldConfig);
 
+bool FileExists(const char *FileName);
+bool ExecFile(const char *FileName);
+bool ExecInternal(const char *Format, ...) ATTR_PRINTF(1, 2);
+bool GetPragmaInt(const char *Name, int *OutValue);
+bool InitDatabaseSchema(void);
+bool UpgradeDatabaseSchema(int UserVersion);
+bool CheckDatabaseSchema(void);
 bool InitDatabase(void);
 void ExitDatabase(void);
 
