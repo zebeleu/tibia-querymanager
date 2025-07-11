@@ -100,15 +100,43 @@ void ExitStatementCache(void){
 
 // Queries
 //==============================================================================
-
-bool LoadHouseOwners(const char *WorldName, DynamicArray<THouseOwner> *HouseOwners){
-	ASSERT(WorldName && HouseOwners);
+bool LoadWorldID(const char *WorldName, int *WorldID){
+	ASSERT(WorldName && WorldID);
 	sqlite3_stmt *Stmt = PrepareQuery(
-			"SELECT HouseID, OwnerID, Characters.Name, PaidUntil"
-			" FROM HouseOwners"
-			" LEFT JOIN Characters ON Characters.CharacterID = OwnerID");
+			"SELECT WorldID FROM Worlds WHERE Name = ?1");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_text(Stmt, 1, WorldName, -1, NULL) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldName: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_ROW){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	*WorldID = sqlite3_column_int(Stmt, 0);
+	return true;
+}
+
+bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *HouseOwners){
+	ASSERT(HouseOwners);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT O.HouseID, O.OwnerID, C.Name, O.PaidUntil"
+			" FROM HouseOwners AS O"
+			" LEFT JOIN Characters AS C ON C.CharacterID = O.OwnerID"
+			" WHERE O.WorldID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
 		return false;
 	}
 
@@ -130,19 +158,237 @@ bool LoadHouseOwners(const char *WorldName, DynamicArray<THouseOwner> *HouseOwne
 	return true;
 }
 
-bool LoadWorldConfig(const char *WorldName, TWorldConfig *WorldConfig){
-	ASSERT(WorldName && WorldConfig);
+bool DeleteHouses(int WorldID){
 	sqlite3_stmt *Stmt = PrepareQuery(
-			"SELECT Type, RebootTime, Address, Port, MaxPlayers,"
-				" PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer"
-			" FROM Worlds WHERE Name = ?1");
+			"DELETE FROM Houses WHERE WorldID = ?1");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
 		return false;
 	}
 
-	if(sqlite3_bind_text(Stmt, 1, WorldName, -1, NULL) != SQLITE_OK){
-		LOG_ERR("Failed to bind WorldName: %s", sqlite3_errmsg(g_Database));
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool InsertHouses(int WorldID, int NumHouses, THouse *Houses){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO Houses (WorldID, HouseID, Name, Rent, Description,"
+				" Size, PositionX, PositionY, PositionZ, Town, GuildHouse)"
+			" VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	for(int i = 0; i < NumHouses; i += 1){
+		if(sqlite3_bind_int(Stmt, 2, Houses[i].HouseID)                != SQLITE_OK
+		|| sqlite3_bind_text(Stmt, 3, Houses[i].Name, -1, NULL)        != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 4, Houses[i].Rent)                   != SQLITE_OK
+		|| sqlite3_bind_text(Stmt, 5, Houses[i].Description, -1, NULL) != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 6, Houses[i].Size)                   != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 7, Houses[i].PositionX)              != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 8, Houses[i].PositionY)              != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 9, Houses[i].PositionZ)              != SQLITE_OK
+		|| sqlite3_bind_text(Stmt, 10, Houses[i].Town, -1, NULL)       != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 11, Houses[i].GuildHouse ? 1: 0)     != SQLITE_OK){
+			LOG_ERR("Failed to bind parameters for house %d: %s",
+					Houses[i].HouseID, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		if(sqlite3_step(Stmt) != SQLITE_DONE){
+			LOG_ERR("Failed to insert house %d: %s",
+					Houses[i].HouseID, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		sqlite3_reset(Stmt);
+	}
+
+	return true;
+}
+
+bool ClearIsOnline(int WorldID, int *NumAffectedCharacters){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"UPDATE Characters SET IsOnline = 0"
+			" WHERE WorldID = ?1 AND IsOnline != 0");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	*NumAffectedCharacters = sqlite3_changes(g_Database);
+	return true;
+}
+
+bool DeleteOnlineCharacters(int WorldID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"DELETE FROM OnlineCharacters WHERE WorldID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Characters){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO OnlineCharacters (WorldID, Name, Level, Profession)"
+			" VALUES (?1, ?2, ?3, ?4)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	for(int i = 0; i < NumCharacters; i += 1){
+		if(sqlite3_bind_text(Stmt, 2, Characters[i].Name, -1, NULL)       != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 3, Characters[i].Level)                 != SQLITE_OK
+		|| sqlite3_bind_text(Stmt, 4, Characters[i].Profession, -1, NULL) != SQLITE_OK){
+			LOG_ERR("Failed to bind parameters for character \"%s\": %s",
+					Characters[i].Name, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		if(sqlite3_step(Stmt) != SQLITE_DONE){
+			LOG_ERR("Failed to insert character \"%s\": %s",
+					Characters[i].Name, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		sqlite3_reset(Stmt);
+	}
+
+	return true;
+}
+
+bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord){
+	ASSERT(NewRecord);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"UPDATE Worlds SET OnlineRecord = ?2"
+			" WHERE WorldID = ?1 AND OnlineRecord < ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 2, NumCharacters) != SQLITE_OK){
+		LOG_ERR("Failed to bind NumCharacters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	*NewRecord = sqlite3_changes(g_Database) > 0;
+	return true;
+}
+
+bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
+		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries){
+	ASSERT(MaxEntries > 0 && NumEntries && Entries);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT CharacterID, Name FROM Characters"
+			" WHERE WorldID = ?1 AND CharacterID >= ?2"
+			" ORDER BY CharacterID ASC LIMIT ?3");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 2, MinimumCharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind MinimumCharacterID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 3, MaxEntries) != SQLITE_OK){
+		LOG_ERR("Failed to bind MaxEntries: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	// NOTE(fusion): We shouldn't get more than `MaxEntries` rows but it's
+	// always better to be safe.
+	int EntryIndex = 0;
+	while(sqlite3_step(Stmt) == SQLITE_ROW && EntryIndex < MaxEntries){
+		Entries[EntryIndex].CharacterID = sqlite3_column_int(Stmt, 0);
+		StringCopy(Entries[EntryIndex].Name,
+				sizeof(Entries[EntryIndex].Name),
+				(const char *)sqlite3_column_text(Stmt, 1));
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	*NumEntries = EntryIndex;
+	return true;
+}
+
+bool LoadWorldConfig(int WorldID, TWorldConfig *WorldConfig){
+	ASSERT(WorldConfig);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT Type, RebootTime, Address, Port, MaxPlayers,"
+				" PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer"
+			" FROM Worlds WHERE WorldID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
 		return false;
 	}
 

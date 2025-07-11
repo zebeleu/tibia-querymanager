@@ -168,6 +168,10 @@ inline void BufferWrite32BE(uint8 *Buffer, uint32 Value){
 }
 
 struct TReadBuffer{
+	uint8 *Buffer;
+	int Size;
+	int Position;
+
 	TReadBuffer(uint8 *Buffer, int Size)
 		: Buffer(Buffer), Size(Size), Position(0) {}
 
@@ -177,6 +181,10 @@ struct TReadBuffer{
 
 	bool Overflowed(void){
 		return this->Position > this->Size;
+	}
+
+	bool ReadFlag(void){
+		return this->Read8() != 0x00;
 	}
 
 	uint8 Read8(void){
@@ -241,15 +249,13 @@ struct TReadBuffer{
 
 		this->Position += Length;
 	}
-
-	// DATA
-	// =================
-	uint8 *Buffer;
-	int Size;
-	int Position;
 };
 
 struct TWriteBuffer{
+	uint8 *Buffer;
+	int Size;
+	int Position;
+
 	TWriteBuffer(uint8 *Buffer, int Size)
 		: Buffer(Buffer), Size(Size), Position(0) {}
 
@@ -259,6 +265,10 @@ struct TWriteBuffer{
 
 	bool Overflowed(void){
 		return this->Position > this->Size;
+	}
+
+	void WriteFlag(bool Value){
+		this->Write8(Value ? 0x01 : 0x00);
 	}
 
 	void Write8(uint8 Value){
@@ -334,12 +344,6 @@ struct TWriteBuffer{
 			this->Position += 4;
 		}
 	}
-
-	// DATA
-	// =================
-	uint8 *Buffer;
-	int Size;
-	int Position;
 };
 
 // Dynamic Array
@@ -565,7 +569,7 @@ struct TConnection{
 	uint8 *Buffer;
 	bool Authorized;
 	int ApplicationType;
-	char ApplicationData[30];
+	int WorldID;
 	char RemoteAddress[30];
 };
 
@@ -649,6 +653,30 @@ struct THouseOwner{
 	int PaidUntil;
 };
 
+struct THouse{
+	int HouseID;
+	char Name[50];
+	int Rent;
+	char Description[500];
+	int Size;
+	int PositionX;
+	int PositionY;
+	int PositionZ;
+	char Town[30];
+	bool GuildHouse;
+};
+
+struct TOnlineCharacter{
+	char Name[30];
+	int Level;
+	char Profession[30];
+};
+
+struct TCharacterIndexEntry{
+	char Name[30];
+	int CharacterID;
+};
+
 struct TWorldConfig{
 	int Type;
 	int RebootTime;
@@ -660,8 +688,18 @@ struct TWorldConfig{
 	int PremiumNewbieBuffer;
 };
 
-bool LoadHouseOwners(const char *WorldName, DynamicArray<THouseOwner> *HouseOwners);
-bool LoadWorldConfig(const char *WorldName, TWorldConfig *WorldConfig);
+bool LoadWorldID(const char *WorldName, int *WorldID);
+//bool DecrementIsOnline(int WorldID, int CharacterID);
+bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *HouseOwners);
+bool DeleteHouses(int WorldID);
+bool InsertHouses(int WorldID, int NumHouses, THouse *Houses);
+bool ClearIsOnline(int WorldID, int *NumAffectedCharacters);
+bool DeleteOnlineCharacters(int WorldID);
+bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Characters);
+bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord);
+bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
+		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
+bool LoadWorldConfig(int WorldID, TWorldConfig *WorldConfig);
 
 bool InitDatabase(void);
 void ExitDatabase(void);

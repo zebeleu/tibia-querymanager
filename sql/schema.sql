@@ -1,3 +1,5 @@
+-- Primary Tables
+--==============================================================================
 CREATE TABLE IF NOT EXISTS Worlds (
 	WorldID INTEGER NOT NULL,
 	Name TEXT NOT NULL COLLATE NOCASE,
@@ -9,6 +11,7 @@ CREATE TABLE IF NOT EXISTS Worlds (
 	PremiumPlayerBuffer INTEGER NOT NULL,
 	MaxNewbies INTEGER NOT NULL,
 	PremiumNewbieBuffer INTEGER NOT NULL,
+	OnlineRecord INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (WorldID),
 	UNIQUE (Name)
 );
@@ -23,8 +26,6 @@ CREATE TABLE IF NOT EXISTS Accounts (
 	UNIQUE (EMail)
 );
 
--- Character Tables
---==============================================================================
 CREATE TABLE IF NOT EXISTS Characters (
 	WorldID INTEGER NOT NULL,
 	CharacterID INTEGER NOT NULL,
@@ -34,10 +35,12 @@ CREATE TABLE IF NOT EXISTS Characters (
 	Guild TEXT NOT NULL COLLATE NOCASE DEFAULT '',
 	Rank TEXT NOT NULL COLLATE NOCASE DEFAULT '',
 	Title TEXT NOT NULL COLLATE NOCASE DEFAULT '',
+	IsOnline INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (CharacterID),
 	UNIQUE (Name)
 );
-CREATE INDEX IF NOT EXISTS CharactersAccountIndex ON Characters(AccountID);
+CREATE INDEX IF NOT EXISTS CharactersWorldIndex   ON Characters(WorldID, IsOnline);
+CREATE INDEX IF NOT EXISTS CharactersAccountIndex ON Characters(AccountID, IsOnline);
 CREATE INDEX IF NOT EXISTS CharactersGuildIndex   ON Characters(Guild);
 
 CREATE TABLE IF NOT EXISTS CharacterBuddies (
@@ -57,15 +60,6 @@ CREATE TABLE IF NOT EXISTS CharacterRights (
 	Right TEXT NOT NULL COLLATE NOCASE,
 	PRIMARY KEY(CharacterID, Right)
 );
-
-CREATE TABLE IF NOT EXISTS OnlineCharacters (
-	CharacterID INTEGER NOT NULL,
-	AccountID INTEGER NOT NULL,
-	IPAddress INTEGER NOT NULL,
-	MultiClient INTEGER NOT NULL,
-	PRIMARY KEY (CharacterID)
-);
-CREATE INDEX IF NOT EXISTS OnlineCharactersAccountIndex ON OnlineCharacters(AccountID);
 
 -- House Tables
 --==============================================================================
@@ -175,3 +169,27 @@ CREATE TABLE IF NOT EXISTS Statements (
 	Comment TEXT NOT NULL,
 	PRIMARY KEY (Timestamp, StatementID)
 );
+
+-- Info Tables
+--==============================================================================
+CREATE TABLE IF NOT EXISTS KillStatistics (
+	WorldID INTEGER NOT NULL,
+	Name TEXT NOT NULL COLLATE NOCASE,
+	TimesKilled INTEGER NOT NULL,
+	PlayersKilled INTEGER NOT NULL,
+	PRIMARY KEY (WorldID, Name)
+);
+
+CREATE TABLE IF NOT EXISTS OnlineCharacters (
+	WorldID INTEGER NOT NULL,
+	Name TEXT NOT NULL COLLATE NOCASE,
+	Level INTEGER NOT NULL,
+	Profession TEXT NOT NULL,
+	PRIMARY KEY (WorldID, Name)
+);
+
+-- REMOVE(fusion): Testing Data.
+--==============================================================================
+INSERT INTO Worlds (Name, Type, RebootTime, Address, Port, MaxPlayers,
+					PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer)
+	VALUES ("Zanera", 0, 5, 0x7F000001, 7172, 1000, 100, 300, 100);

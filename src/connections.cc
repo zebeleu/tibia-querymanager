@@ -466,25 +466,38 @@ void SendQueryStatusFailed(TConnection *Connection){
 
 void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer){
 	char Password[30];
-	char ApplicationData[30];
+	char LoginData[30];
 	int ApplicationType = Buffer->Read8();
 	Buffer->ReadString(Password, sizeof(Password));
 	if(ApplicationType == APPLICATION_TYPE_GAME){
-		Buffer->ReadString(ApplicationData, sizeof(ApplicationData));
+		Buffer->ReadString(LoginData, sizeof(LoginData));
 	}
 
+	// TODO(fusion): Probably just disconnect on failed login attempt? Implement
+	// write then disconnect?
 	if(!StringEq(g_Password, Password)){
 		LOG_WARN("Invalid login attempt from %s", Connection->RemoteAddress);
 		SendQueryStatusFailed(Connection);
 		return;
 	}
 
-	LOG("Connection %s AUTHORIZED", Connection->RemoteAddress);
+	int WorldID = -1;
+	if(ApplicationType == APPLICATION_TYPE_GAME){
+		if(!LoadWorldID(LoginData, &WorldID)){
+			LOG_WARN("Invalid world name \"%s\"", LoginData);
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+
+		LOG("Connection %s AUTHORIZED to world \"%s\" (%d)",
+				Connection->RemoteAddress, LoginData, WorldID);
+	}else{
+		LOG("Connection %s AUTHORIZED", Connection->RemoteAddress);
+	}
+
 	Connection->Authorized = true;
 	Connection->ApplicationType = ApplicationType;
-	StringCopy(Connection->ApplicationData,
-			sizeof(Connection->ApplicationData),
-			ApplicationData);
+	Connection->WorldID = WorldID;
 	SendQueryStatusOk(Connection);
 }
 
@@ -579,8 +592,7 @@ void ProcessGetHouseOwnersQuery(TConnection *Connection, TReadBuffer *Buffer){
 	}
 
 	DynamicArray<THouseOwner> HouseOwners;
-	const char *WorldName = Connection->ApplicationData;
-	if(!LoadHouseOwners(WorldName, &HouseOwners)){
+	if(!LoadHouseOwners(Connection->WorldID, &HouseOwners)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -606,15 +618,101 @@ void ProcessStartAuctionQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessInsertHousesQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// TODO(fusion): Have some TransactionGuard type that will either commit or
+	// rollback a transaction when we leave its scope, based on whether some
+	// `Commit` function was called.
+
+	if(!DeleteHouses(Connection->WorldID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int NumHouses = Buffer->Read16();
+	if(NumHouses > 0){
+		THouse *Houses = (THouse*)alloca(NumHouses * sizeof(THouse));
+		for(int i = 0; i < NumHouses; i += 1){
+			Houses[i].HouseID = Buffer->Read16();
+			Buffer->ReadString(Houses[i].Name, sizeof(Houses[i].Name));
+			Houses[i].Rent = (int)Buffer->Read32();
+			Buffer->ReadString(Houses[i].Description, sizeof(Houses[i].Description));
+			Houses[i].Size = Buffer->Read16();
+			Houses[i].PositionX = Buffer->Read16();
+			Houses[i].PositionY = Buffer->Read16();
+			Houses[i].PositionZ = Buffer->Read8();
+			Buffer->ReadString(Houses[i].Town, sizeof(Houses[i].Town));
+			Houses[i].GuildHouse = Buffer->ReadFlag();
+		}
+
+		if(!InsertHouses(Connection->WorldID, NumHouses, Houses)){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessClearIsOnlineQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int NumAffectedCharacters;
+	if(!ClearIsOnline(Connection->WorldID, &NumAffectedCharacters)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.Write16((uint16)NumAffectedCharacters);
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessCreatePlayerlistQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// TODO(fusion): Have some TransactionGuard type that will either commit or
+	// rollback a transaction when we leave its scope, based on whether some
+	// `Commit` function was called.
+
+	if(!DeleteOnlineCharacters(Connection->WorldID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	bool NewRecord = false;
+	int NumCharacters = Buffer->Read16();
+	if(NumCharacters != 0xFFFF && NumCharacters > 0){
+		TOnlineCharacter *Characters = (TOnlineCharacter*)alloca(NumCharacters * sizeof(TOnlineCharacter));
+		for(int i = 0; i < NumCharacters; i += 1){
+			Buffer->ReadString(Characters[i].Name, sizeof(Characters[i].Name));
+			Characters[i].Level = Buffer->Read16();
+			Buffer->ReadString(Characters[i].Profession, sizeof(Characters[i].Profession));
+		}
+
+		if(!InsertOnlineCharacters(Connection->WorldID, NumCharacters, Characters)){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+
+		if(!CheckOnlineRecord(Connection->WorldID, NumCharacters, &NewRecord)){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.WriteFlag(NewRecord);
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessLogKilledCreaturesQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -622,7 +720,29 @@ void ProcessLogKilledCreaturesQuery(TConnection *Connection, TReadBuffer *Buffer
 }
 
 void ProcessLoadPlayersQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// IMPORTANT(fusion): The server expect 10K entries at most. It is probably
+	// some shared hard coded constant.
+	int NumEntries;
+	TCharacterIndexEntry Entries[10000];
+	int MinimumCharacterID = (int)Buffer->Read32();
+	if(!LoadCharacterIndex(Connection->WorldID,
+			MinimumCharacterID, NARRAY(Entries), &NumEntries, Entries)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.Write32((uint32)NumEntries);
+	for(int i = 0; i < NumEntries; i += 1){
+		WriteBuffer.WriteString(Entries[i].Name);
+		WriteBuffer.Write32((uint32)Entries[i].CharacterID);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessExcludeFromAuctionsQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -640,8 +760,7 @@ void ProcessLoadWorldConfigQuery(TConnection *Connection, TReadBuffer *Buffer){
 	}
 
 	TWorldConfig WorldConfig = {};
-	const char *WorldName = Connection->ApplicationData;
-	if(!LoadWorldConfig(WorldName, &WorldConfig)){
+	if(!LoadWorldConfig(Connection->WorldID, &WorldConfig)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}

@@ -11,10 +11,8 @@ LFLAGS = -Wl,-t
 DEBUG ?= 0
 ifneq ($(DEBUG), 0)
 	CFLAGS += -g -O0
-	CXXFLAGS += -g -O0
 else
 	CFLAGS += -O2
-	CXXFLAGS += -O2
 endif
 
 $(BUILDDIR)/$(OUTPUTEXE): $(BUILDDIR)/connections.obj $(BUILDDIR)/database.obj $(BUILDDIR)/querymanager.obj $(BUILDDIR)/sqlite3.obj
