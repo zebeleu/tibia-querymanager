@@ -550,39 +550,194 @@ void ProcessRemoveBuddyQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessDecrementIsOnlineQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = (int)Buffer->Read32();
+	if(!DecrementIsOnline(Connection->WorldID, CharacterID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessFinishAuctionsQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<THouseAuction> Auctions;
+	if(!FinishHouseAuctions(Connection->WorldID, &Auctions)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumAuctions = std::min<int>(Auctions.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumAuctions);
+	for(int i = 0; i < NumAuctions; i += 1){
+		WriteBuffer.Write16((uint16)Auctions[i].HouseID);
+		WriteBuffer.Write32((uint32)Auctions[i].BidderID);
+		WriteBuffer.WriteString(Auctions[i].BidderName);
+		WriteBuffer.Write32((uint32)Auctions[i].BidAmount);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessTransferHousesQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<THouseTransfer> Transfers;
+	if(!FinishHouseTransfers(Connection->WorldID, &Transfers)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumTransfers = std::min<int>(Transfers.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumTransfers);
+	for(int i = 0; i < NumTransfers; i += 1){
+		WriteBuffer.Write16((uint16)Transfers[i].HouseID);
+		WriteBuffer.Write32((uint32)Transfers[i].NewOwnerID);
+		WriteBuffer.WriteString(Transfers[i].NewOwnerName);
+		WriteBuffer.Write32((uint32)Transfers[i].Price);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessEvictFreeAccountsQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<THouseEviction> Evictions;
+	if(!LoadFreeAccountEvictions(Connection->WorldID, &Evictions)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumEvictions = std::min<int>(Evictions.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumEvictions);
+	for(int i = 0; i < NumEvictions; i += 1){
+		WriteBuffer.Write16((uint16)Evictions[i].HouseID);
+		WriteBuffer.Write32((uint32)Evictions[i].OwnerID);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessEvictDeletedCharactersQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<THouseEviction> Evictions;
+	if(!LoadDeletedCharacterEvictions(Connection->WorldID, &Evictions)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumEvictions = std::min<int>(Evictions.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumEvictions);
+	for(int i = 0; i < NumEvictions; i += 1){
+		WriteBuffer.Write16((uint16)Evictions[i].HouseID);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessEvictExGuildleadersQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// NOTE(fusion): This is a bit different from the other eviction functions.
+	// The server doesn't maintain guild information for characters so it will
+	// send a list of guild houses with their owners and we're supposed to check
+	// whether the owner is still a guild leader. I don't think we should check
+	// any other information as the server is authoritative on house information.
+	DynamicArray<int> Evictions;
+	int NumGuildHouses = Buffer->Read16();
+	for(int i = 0; i < NumGuildHouses; i += 1){
+		bool IsGuildLeader = false;
+		int HouseID = Buffer->Read16();
+		int OwnerID = (int)Buffer->Read32();
+		if(!CheckGuildLeaderStatus(Connection->WorldID, OwnerID, &IsGuildLeader)){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+
+		if(!IsGuildLeader){
+			Evictions.Push(HouseID);
+		}
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumEvictions = std::min<int>(Evictions.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumEvictions);
+	for(int i = 0; i < NumEvictions; i += 1){
+		WriteBuffer.Write16((uint16)Evictions[i]);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessInsertHouseOwnerQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int HouseID = Buffer->Read16();
+	int OwnerID = (int)Buffer->Read32();
+	int PaidUntil = (int)Buffer->Read32();
+	if(!InsertHouseOwner(Connection->WorldID, HouseID, OwnerID, PaidUntil)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessUpdateHouseOwnerQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int HouseID = Buffer->Read16();
+	int OwnerID = (int)Buffer->Read32();
+	int PaidUntil = (int)Buffer->Read32();
+	if(!UpdateHouseOwner(Connection->WorldID, HouseID, OwnerID, PaidUntil)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessDeleteHouseOwnerQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int HouseID = Buffer->Read16();
+	if(!DeleteHouseOwner(Connection->WorldID, HouseID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessGetHouseOwnersQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -591,30 +746,58 @@ void ProcessGetHouseOwnersQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
-	DynamicArray<THouseOwner> HouseOwners;
-	if(!LoadHouseOwners(Connection->WorldID, &HouseOwners)){
+	DynamicArray<THouseOwner> Owners;
+	if(!LoadHouseOwners(Connection->WorldID, &Owners)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
 
 	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
-	int NumHouseOwners = std::min<int>(HouseOwners.Length(), UINT16_MAX);
-	WriteBuffer.Write16((uint16)NumHouseOwners);
-	for(int i = 0; i < NumHouseOwners; i += 1){
-		WriteBuffer.Write16((uint16)HouseOwners[i].HouseID);
-		WriteBuffer.Write32((uint32)HouseOwners[i].OwnerID);
-		WriteBuffer.WriteString(HouseOwners[i].OwnerName);
-		WriteBuffer.Write32((uint32)HouseOwners[i].PaidUntil);
+	int NumOwners = std::min<int>(Owners.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumOwners);
+	for(int i = 0; i < NumOwners; i += 1){
+		WriteBuffer.Write16((uint16)Owners[i].HouseID);
+		WriteBuffer.Write32((uint32)Owners[i].OwnerID);
+		WriteBuffer.WriteString(Owners[i].OwnerName);
+		WriteBuffer.Write32((uint32)Owners[i].PaidUntil);
 	}
 	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessGetAuctionsQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<int> Auctions;
+	if(!LoadHouseAuctions(Connection->WorldID, &Auctions)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumAuctions = std::min<int>(Auctions.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumAuctions);
+	for(int i = 0; i < NumAuctions; i += 1){
+		WriteBuffer.Write16((uint16)Auctions[i]);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessStartAuctionQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int HouseID = Buffer->Read16();
+	if(!StartHouseAuction(Connection->WorldID, HouseID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessInsertHousesQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -686,7 +869,6 @@ void ProcessCreatePlayerlistQuery(TConnection *Connection, TReadBuffer *Buffer){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
-
 
 	TransactionScope Tx("OnlineList");
 	if(!Tx.Begin()){
@@ -761,11 +943,56 @@ void ProcessLoadPlayersQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessExcludeFromAuctionsQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("ExcludeFromAuctions");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = (int)Buffer->Read32();
+	bool Banish = Buffer->ReadFlag();
+	int Duration = 7 * 86400; // one week
+	int BanishmentID = 0;
+	if(Banish){
+		Duration = 30 * 86400; // one month
+#if 0
+		// TODO(fusion): When banishment is implemented.
+		if(!BanishCharacterAccount(CharacterID, &BanishmentID, ..., "Spoiling Auction")){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+#endif
+	}
+
+	if(!ExcludeFromAuctions(Connection->WorldID, CharacterID, Duration, BanishmentID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessCancelHouseTransferQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// TODO(fusion): Not sure what this is used for. Maybe house transfer rows
+	// are kept permanently and this query is used to delete/flag it, in case
+	// the it didn't complete. We might need to refine `FinishHouseTransfers`.
+	//int HouseID = Buffer->Read16();
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessLoadWorldConfigQuery(TConnection *Connection, TReadBuffer *Buffer){

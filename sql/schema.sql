@@ -36,12 +36,16 @@ CREATE TABLE IF NOT EXISTS Characters (
 	Rank TEXT NOT NULL COLLATE NOCASE DEFAULT '',
 	Title TEXT NOT NULL COLLATE NOCASE DEFAULT '',
 	IsOnline INTEGER NOT NULL DEFAULT 0,
+	Deleted INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (CharacterID),
 	UNIQUE (Name)
 );
-CREATE INDEX IF NOT EXISTS CharactersWorldIndex   ON Characters(WorldID, IsOnline);
-CREATE INDEX IF NOT EXISTS CharactersAccountIndex ON Characters(AccountID, IsOnline);
-CREATE INDEX IF NOT EXISTS CharactersGuildIndex   ON Characters(Guild);
+CREATE INDEX IF NOT EXISTS CharactersWorldIndex
+		ON Characters(WorldID, IsOnline);
+CREATE INDEX IF NOT EXISTS CharactersAccountIndex
+		ON Characters(AccountID, IsOnline);
+CREATE INDEX IF NOT EXISTS CharactersGuildIndex
+		ON Characters(Guild, Rank);
 
 CREATE TABLE IF NOT EXISTS CharacterBuddies (
 	CharacterID INTEGER NOT NULL,
@@ -92,9 +96,9 @@ CREATE TABLE IF NOT EXISTS HouseOwners (
 CREATE TABLE IF NOT EXISTS HouseAuctions (
 	WorldID INTEGER NOT NULL,
 	HouseID INTEGER NOT NULL,
-	BidderID INTEGER,
-	BidAmount INTEGER,
-	FinishTime INTEGER,
+	BidderID INTEGER DEFAULT NULL,
+	BidAmount INTEGER DEFAULT NULL,
+	FinishTime INTEGER DEFAULT NULL,
 	PRIMARY KEY (WorldID, HouseID)
 );
 
@@ -106,6 +110,14 @@ CREATE TABLE IF NOT EXISTS HouseTransfers (
 	PRIMARY KEY (WorldID, HouseID)
 );
 
+CREATE TABLE IF NOT EXISTS HouseAuctionExclusions (
+	CharacterID INTEGER NOT NULL,
+	Until INTEGER NOT NULL,
+	BanishmentID INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS HouseAuctionExclusionsIndex
+		ON HouseAuctionExclusions(CharacterID, Until);
+
 CREATE TABLE IF NOT EXISTS HouseAssignments (
 	WorldID INTEGER NOT NULL,
 	HouseID INTEGER NOT NULL,
@@ -113,8 +125,12 @@ CREATE TABLE IF NOT EXISTS HouseAssignments (
 	Price INTEGER NOT NULL,
 	Timestamp INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS HouseAssignmentsHouseIndex ON HouseAssignments(WorldID, HouseID);
-CREATE INDEX IF NOT EXISTS HouseAssignmentsOwnerIndex ON HouseAssignments(OwnerID);
+CREATE INDEX IF NOT EXISTS HouseAssignmentsHouseIndex
+		ON HouseAssignments(WorldID, HouseID);
+CREATE INDEX IF NOT EXISTS HouseAssignmentsTimeIndex
+		ON HouseAssignments(WorldID, Timestamp);
+CREATE INDEX IF NOT EXISTS HouseAssignmentsOwnerIndex
+		ON HouseAssignments(OwnerID);
 
 -- Banishment Tables
 --==============================================================================
@@ -155,9 +171,10 @@ CREATE TABLE IF NOT EXISTS Notations (
 	Reason TEXT NOT NULL,
 	Comment TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS NotationsCharacterIndex ON Notations(CharacterID);
+CREATE INDEX IF NOT EXISTS NotationsCharacterIndex
+		ON Notations(CharacterID);
 
-CREATE TABLE IF NOT EXISTS Statements (
+CREATE TABLE IF NOT EXISTS ReportedStatements (
 	Timestamp INTEGER NOT NULL,
 	StatementID INTEGER NOT NULL,
 	CharacterID INTEGER NOT NULL,
@@ -169,6 +186,8 @@ CREATE TABLE IF NOT EXISTS Statements (
 	Comment TEXT NOT NULL,
 	PRIMARY KEY (Timestamp, StatementID)
 );
+CREATE INDEX IF NOT EXISTS ReportedStatementsCharacterIndex
+		ON ReportedStatements(CharacterID, Timestamp);
 
 -- Info Tables
 --==============================================================================
@@ -192,4 +211,4 @@ CREATE TABLE IF NOT EXISTS OnlineCharacters (
 --==============================================================================
 INSERT INTO Worlds (Name, Type, RebootTime, Address, Port, MaxPlayers,
 					PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer)
-	VALUES ("Zanera", 0, 5, 0x7F000001, 7172, 1000, 100, 300, 100);
+	VALUES ('Zanera', 0, 5, 0x7F000001, 7172, 1000, 100, 300, 100);

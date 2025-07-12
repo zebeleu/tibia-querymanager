@@ -112,17 +112,21 @@ bool StringEqCI(const char *A, const char *B){
 bool StringCopyN(char *Dest, int DestCapacity, const char *Src, int SrcLength){
 	ASSERT(DestCapacity > 0);
 	bool Result = (SrcLength < DestCapacity);
-	if(Result){
+	if(Result && SrcLength > 0){
 		memcpy(Dest, Src, SrcLength);
 		Dest[SrcLength] = 0;
 	}else{
 		Dest[0] = 0;
 	}
-	return true;
+	return Result;
 }
 
 bool StringCopy(char *Dest, int DestCapacity, const char *Src){
-	return StringCopyN(Dest, DestCapacity, Src, (int)strlen(Src));
+	// IMPORTANT(fusion): `sqlite3_column_text` may return NULL if the column is
+	// also NULL so we have an incentive to properly handle the case where `Src`
+	// is NULL.
+	int SrcLength = (Src != NULL ? (int)strlen(Src) : 0);
+	return StringCopyN(Dest, DestCapacity, Src, SrcLength);
 }
 
 bool ReadBooleanConfig(bool *Dest, const char *Val){

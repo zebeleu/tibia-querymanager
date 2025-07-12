@@ -144,7 +144,7 @@ bool TransactionScope::Commit(void){
 // Queries
 //==============================================================================
 bool LoadWorldID(const char *WorldName, int *WorldID){
-	ASSERT(WorldName && WorldID);
+	ASSERT(WorldName != NULL && WorldID != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"SELECT WorldID FROM Worlds WHERE Name = ?1");
 	if(Stmt == NULL){
@@ -166,8 +166,283 @@ bool LoadWorldID(const char *WorldName, int *WorldID){
 	return true;
 }
 
-bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *HouseOwners){
-	ASSERT(HouseOwners);
+bool DecrementIsOnline(int WorldID, int CharacterID){
+	// NOTE(fusion): A character is uniquely identified by its id. The world id
+	// check is purely to avoid a world from modifying a character from another
+	// world.
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"UPDATE Characters SET IsOnline = IsOnline - 1"
+			" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)     != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
+}
+
+bool FinishHouseAuctions(int WorldID, DynamicArray<THouseAuction> *Auctions){
+	ASSERT(Auctions != NULL);
+	// TODO(fusion): If the application crashes while processing finished auctions,
+	// non processed auctions will be lost but with no other side-effects. It could
+	// be an inconvenience but it's not a big problem.
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"DELETE FROM HouseAuctions"
+			" WHERE WorldID = ?1 AND FinishTime != NULL AND FinishTime <= UNIXEPOCH()"
+			" RETURNING HouseID, BidderID, BidAmount, FinishTime,"
+				" (SELECT Name FROM Characters WHERE CharacterID = BidderID)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		THouseAuction Auction = {};
+		Auction.HouseID = sqlite3_column_int(Stmt, 0);
+		Auction.BidderID = sqlite3_column_int(Stmt, 1);
+		Auction.BidAmount = sqlite3_column_int(Stmt, 2);
+		Auction.FinishTime = sqlite3_column_int(Stmt, 3);
+		StringCopy(Auction.BidderName, sizeof(Auction.BidderName),
+				(const char*)sqlite3_column_text(Stmt, 4));
+		Auctions->Push(Auction);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool FinishHouseTransfers(int WorldID, DynamicArray<THouseTransfer> *Transfers){
+	ASSERT(Transfers != NULL);
+	// TODO(fusion): Same as `FinishHouseAuctions` but with house transfers.
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"DELETE FROM HouseTransfers"
+			" WHERE WorldID = ?1"
+			" RETURNING HouseID, NewOwnerID, Price,"
+				" (SELECT Name FROM Characters WHERE CharacterID = NewOwnerID)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		THouseTransfer Transfer = {};
+		Transfer.HouseID = sqlite3_column_int(Stmt, 0);
+		Transfer.NewOwnerID = sqlite3_column_int(Stmt, 1);
+		Transfer.Price = sqlite3_column_int(Stmt, 2);
+		StringCopy(Transfer.NewOwnerName, sizeof(Transfer.NewOwnerName),
+				(const char*)sqlite3_column_text(Stmt, 4));
+		Transfers->Push(Transfer);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool LoadFreeAccountEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions){
+	ASSERT(Evictions != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT O.HouseID, O.OwnerID"
+			" FROM HouseOwners AS O"
+			" LEFT JOIN CharacterRights AS R"
+				" ON R.CharacterID = O.OwnerID AND R.Right = 'PREMIUM_ACCOUNT'"
+			" WHERE O.WorldID = ?1 AND R.CharacterID IS NULL");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		THouseEviction Eviction = {};
+		Eviction.HouseID = sqlite3_column_int(Stmt, 0);
+		Eviction.OwnerID = sqlite3_column_int(Stmt, 1);
+		Evictions->Push(Eviction);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool LoadDeletedCharacterEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions){
+	ASSERT(Evictions != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT O.HouseID, O.OwnerID"
+			" FROM HouseOwners AS O"
+			" LEFT JOIN Characters AS C ON C.CharacterID = O.OwnerID"
+			" WHERE O.WorldID = ?1"
+				" AND (C.CharacterID IS NULL OR C.Deleted != 0)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		THouseEviction Eviction = {};
+		Eviction.HouseID = sqlite3_column_int(Stmt, 0);
+		Eviction.OwnerID = sqlite3_column_int(Stmt, 1);
+		Evictions->Push(Eviction);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool CheckGuildLeaderStatus(int WorldID, int CharacterID, bool *IsGuildLeader){
+	// NOTE(fusion): Same as `DecrementIsOnline`.
+	ASSERT(IsGuildLeader != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT Guild, Rank FROM Characters"
+			" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	*IsGuildLeader = false;
+	if(ErrorCode == SQLITE_ROW){
+		const char *Guild = (const char*)sqlite3_column_text(Stmt, 0);
+		const char *Rank = (const char*)sqlite3_column_text(Stmt, 1);
+		if(Guild != NULL && Rank != NULL && Guild[0] != 0 && StringEqCI(Rank, "Leader")){
+			*IsGuildLeader = true;
+		}
+	}
+
+	return true;
+}
+
+bool InsertHouseOwner(int WorldID, int HouseID, int OwnerID, int PaidUntil){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO HouseOwners (WorldID, HouseID, OwnerID, PaidUntil)"
+			" VALUES (?1, ?2, ?3, ?4)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, HouseID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, OwnerID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 4, PaidUntil) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool UpdateHouseOwner(int WorldID, int HouseID, int OwnerID, int PaidUntil){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"UPDATE HouseOwners SET OwnerID = ?3, PaidUntil = ?4"
+			" WHERE WorldID = ?1 AND HouseID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, HouseID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, OwnerID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 4, PaidUntil) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
+}
+
+bool DeleteHouseOwner(int WorldID, int HouseID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"DELETE FROM HouseOwners"
+			" WHERE WorldID = ?1 AND HouseID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, HouseID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
+}
+
+bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *Owners){
+	ASSERT(Owners != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"SELECT O.HouseID, O.OwnerID, C.Name, O.PaidUntil"
 			" FROM HouseOwners AS O"
@@ -190,10 +465,58 @@ bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *HouseOwners){
 		StringCopy(Owner.OwnerName, sizeof(Owner.OwnerName),
 				(const char*)sqlite3_column_text(Stmt, 2));
 		Owner.PaidUntil = sqlite3_column_int(Stmt, 3);
-		HouseOwners->Push(Owner);
+		Owners->Push(Owner);
 	}
 
 	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool LoadHouseAuctions(int WorldID, DynamicArray<int> *Auctions){
+	ASSERT(Auctions != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT HouseID FROM HouseAuctions WHERE WorldID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		Auctions->Push(sqlite3_column_int(Stmt, 0));
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool StartHouseAuction(int WorldID, int HouseID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO HouseAuctions (WorldID, HouseID) VALUES (?1, ?2)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, HouseID)   != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
 		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
 		return false;
 	}
@@ -345,7 +668,7 @@ bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Ch
 }
 
 bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord){
-	ASSERT(NewRecord);
+	ASSERT(NewRecord != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"UPDATE Worlds SET OnlineRecord = ?2"
 			" WHERE WorldID = ?1 AND OnlineRecord < ?2");
@@ -354,13 +677,9 @@ bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord){
 		return false;
 	}
 
-	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
-		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
-		return false;
-	}
-
-	if(sqlite3_bind_int(Stmt, 2, NumCharacters) != SQLITE_OK){
-		LOG_ERR("Failed to bind NumCharacters: %s", sqlite3_errmsg(g_Database));
+	if(sqlite3_bind_int(Stmt, 1, WorldID)       != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, NumCharacters) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
 		return false;
 	}
 
@@ -375,7 +694,7 @@ bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord){
 
 bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
 		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries){
-	ASSERT(MaxEntries > 0 && NumEntries && Entries);
+	ASSERT(MaxEntries > 0 && NumEntries != NULL && Entries != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"SELECT CharacterID, Name FROM Characters"
 			" WHERE WorldID = ?1 AND CharacterID >= ?2"
@@ -385,18 +704,10 @@ bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
 		return false;
 	}
 
-	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
-		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
-		return false;
-	}
-
-	if(sqlite3_bind_int(Stmt, 2, MinimumCharacterID) != SQLITE_OK){
-		LOG_ERR("Failed to bind MinimumCharacterID: %s", sqlite3_errmsg(g_Database));
-		return false;
-	}
-
-	if(sqlite3_bind_int(Stmt, 3, MaxEntries) != SQLITE_OK){
-		LOG_ERR("Failed to bind MaxEntries: %s", sqlite3_errmsg(g_Database));
+	if(sqlite3_bind_int(Stmt, 1, WorldID)            != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, MinimumCharacterID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, MaxEntries)         != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
 		return false;
 	}
 
@@ -419,8 +730,35 @@ bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
 	return true;
 }
 
+bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID){
+	// NOTE(fusion): Same as `DecrementIsOnline`.
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO HouseAuctionExclusions (CharacterID, Until, BanishmentID)"
+			" SELECT CharacterID, (UNIXEPOCH() + ?3), ?4 FROM Characters"
+				" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)      != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID)  != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, Duration)     != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, BanishmentID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
+}
+
 bool LoadWorldConfig(int WorldID, TWorldConfig *WorldConfig){
-	ASSERT(WorldConfig);
+	ASSERT(WorldConfig != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"SELECT Type, RebootTime, Address, Port, MaxPlayers,"
 				" PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer"

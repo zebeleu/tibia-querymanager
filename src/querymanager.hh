@@ -646,6 +646,26 @@ void ProcessConnectionQuery(TConnection *Connection);
 
 // database.cc
 //==============================================================================
+struct THouseAuction{
+	int HouseID;
+	int BidderID;
+	char BidderName[30];
+	int BidAmount;
+	int FinishTime;
+};
+
+struct THouseTransfer{
+	int HouseID;
+	int NewOwnerID;
+	char NewOwnerName[30];
+	int Price;
+};
+
+struct THouseEviction{
+	int HouseID;
+	int OwnerID;
+};
+
 struct THouseOwner{
 	int HouseID;
 	int OwnerID;
@@ -701,8 +721,18 @@ public:
 };
 
 bool LoadWorldID(const char *WorldName, int *WorldID);
-//bool DecrementIsOnline(int WorldID, int CharacterID);
-bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *HouseOwners);
+bool DecrementIsOnline(int WorldID, int CharacterID);
+bool FinishHouseAuctions(int WorldID, DynamicArray<THouseAuction> *Auctions);
+bool FinishHouseTransfers(int WorldID, DynamicArray<THouseTransfer> *Transfers);
+bool LoadFreeAccountEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions);
+bool LoadDeletedCharacterEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions);
+bool CheckGuildLeaderStatus(int WorldID, int CharacterID, bool *IsGuildLeader);
+bool InsertHouseOwner(int WorldID, int HouseID, int OwnerID, int PaidUntil);
+bool UpdateHouseOwner(int WorldID, int HouseID, int OwnerID, int PaidUntil);
+bool DeleteHouseOwner(int WorldID, int HouseID);
+bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *Owners);
+bool LoadHouseAuctions(int WorldID, DynamicArray<int> *Auctions);
+bool StartHouseAuction(int WorldID, int HouseID);
 bool DeleteHouses(int WorldID);
 bool InsertHouses(int WorldID, int NumHouses, THouse *Houses);
 bool ClearIsOnline(int WorldID, int *NumAffectedCharacters);
@@ -711,6 +741,7 @@ bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Ch
 bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord);
 bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
 		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
+bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID);
 bool LoadWorldConfig(int WorldID, TWorldConfig *WorldConfig);
 
 bool FileExists(const char *FileName);
