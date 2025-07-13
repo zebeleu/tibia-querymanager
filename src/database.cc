@@ -760,31 +760,31 @@ bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int Banishm
 
 // Banishment tables
 //==============================================================================
-bool GetNamelockStatus(int CharacterID, bool *Approved){
-	ASSERT(Approved);
+TNamelockStatus GetNamelockStatus(int CharacterID){
+	TNamelockStatus Status = {};
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"SELECT Approved FROM Namelocks WHERE CharacterID = ?1");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
-		return false;
+		return Status;
 	}
 
 	if(sqlite3_bind_int(Stmt, 1, CharacterID) != SQLITE_OK){
 		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
-		return false;
+		return Status;
 	}
 
 	int ErrorCode = sqlite3_step(Stmt);
 	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
 		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
-		return false;
+		return Status;
 	}
 
-	bool Result = (ErrorCode == SQLITE_ROW);
-	if(Result){
-		*Approved = (sqlite3_column_int(Stmt, 0) != 0);
+	Status.Namelocked = (ErrorCode == SQLITE_ROW);
+	if(Status.Namelocked){
+		Status.Approved = (sqlite3_column_int(Stmt, 0) != 0);
 	}
-	return Result;
+	return Status;
 }
 
 bool InsertNamelock(int CharacterID, int IPAddress,
@@ -812,6 +812,80 @@ bool InsertNamelock(int CharacterID, int IPAddress,
 		return false;
 	}
 
+	return true;
+}
+
+TBanishmentStatus GetBanishmentStatus(int CharacterID){
+	TBanishmentStatus Status = {};
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT B.FinalWarning, (B.Until = B.Issued OR B.Until > UNIXEPOCH())"
+			" FROM Banishments AS B"
+			" LEFT JOIN Characters AS C ON C.AccountID = B.AccountID"
+			" WHERE C.CharacterID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return Status;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return Status;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		Status.TimesBanished += 1;
+
+		if(sqlite3_column_int(Stmt, 0) != 0){
+			Status.FinalWarning = true;
+		}
+
+		if(sqlite3_column_int(Stmt, 1) != 0){
+			Status.Banished = true;
+		}
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return Status;
+	}
+
+	return Status;
+}
+
+bool InsertBanishment(int CharacterID, int IPAddress,
+		int GamemasterID, const char *Reason, const char *Comment,
+		bool FinalWarning, int Duration, int *BanishmentID){
+	// TODO(fusion): Not sure if I like these insertions with subqueries. We might
+	// as well just get the account id before hand.
+	ASSERT(BanishmentID);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO Banishments (AccountID, IPAddress, GamemasterID,"
+				" Reason, Comment, FinalWarning, Issued, Until)"
+			" VALUES ((SELECT AccountID FROM Characters WHERE CharacterID = ?1),"
+				" ?2, ?3, ?4, ?5, ?6, UNIXEPOCH(), UNIXEPOCH() + ?7)"
+			" RETURNING BanishmentID");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID)        != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, IPAddress)          != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, GamemasterID)       != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 4, Reason, -1, NULL)  != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 5, Comment, -1, NULL) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 6, FinalWarning)       != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 7, Duration)           != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_ROW){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	*BanishmentID = sqlite3_column_int(Stmt, 0);
 	return true;
 }
 

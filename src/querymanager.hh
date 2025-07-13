@@ -647,6 +647,22 @@ void ProcessConnectionQuery(TConnection *Connection);
 
 // database.cc
 //==============================================================================
+struct TWorldConfig{
+	int Type;
+	int RebootTime;
+	int Address;
+	int Port;
+	int MaxPlayers;
+	int PremiumPlayerBuffer;
+	int MaxNewbies;
+	int PremiumNewbieBuffer;
+};
+
+struct TCharacterIndexEntry{
+	char Name[30];
+	int CharacterID;
+};
+
 struct THouseAuction{
 	int HouseID;
 	int BidderID;
@@ -687,28 +703,24 @@ struct THouse{
 	bool GuildHouse;
 };
 
+struct TNamelockStatus{
+	bool Namelocked;
+	bool Approved;
+};
+
+struct TBanishmentStatus{
+	bool Banished;
+	bool FinalWarning;
+	int TimesBanished;
+};
+
 struct TOnlineCharacter{
 	char Name[30];
 	int Level;
 	char Profession[30];
 };
 
-struct TCharacterIndexEntry{
-	char Name[30];
-	int CharacterID;
-};
-
-struct TWorldConfig{
-	int Type;
-	int RebootTime;
-	int Address;
-	int Port;
-	int MaxPlayers;
-	int PremiumPlayerBuffer;
-	int MaxNewbies;
-	int PremiumNewbieBuffer;
-};
-
+// NOTE(fusion): Transaction scope guard.
 struct TransactionScope{
 private:
 	const char *m_Context;
@@ -748,9 +760,13 @@ bool InsertHouses(int WorldID, int NumHouses, THouse *Houses);
 bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID);
 
 // NOTE(fusion): Banishment tables.
-bool GetNamelockStatus(int CharacterID, bool *Approved);
+TNamelockStatus GetNamelockStatus(int CharacterID);
 bool InsertNamelock(int CharacterID, int IPAddress,
 		int GamemasterID, const char *Reason, const char *Comment);
+TBanishmentStatus GetBanishmentStatus(int CharacterID);
+bool InsertBanishment(int CharacterID, int IPAddress,
+		int GamemasterID, const char *Reason, const char *Comment,
+		bool FinalWarning, int Duration, int *BanishmentID);
 
 // NOTE(fusion): Info tables.
 bool DeleteOnlineCharacters(int WorldID);

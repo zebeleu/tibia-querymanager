@@ -142,9 +142,12 @@ CREATE TABLE IF NOT EXISTS Banishments (
 	Reason TEXT NOT NULL,
 	Comment TEXT NOT NULL,
 	FinalWarning INTEGER NOT NULL,
+	Issued INTEGER NOT NULL,
 	Until INTEGER NOT NULL,
 	PRIMARY KEY (BanishmentID)
 );
+CREATE INDEX IF NOT EXISTS BanishmentsAccount
+		ON Banishments(AccountID, Until, FinalWarning);
 
 CREATE TABLE IF NOT EXISTS IPBanishments (
 	IPAddress INTEGER NOT NULL,

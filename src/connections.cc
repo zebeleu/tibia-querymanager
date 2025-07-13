@@ -534,8 +534,9 @@ void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
 	Buffer->ReadString(Reason, sizeof(Reason));
 	Buffer->ReadString(Comment, sizeof(Comment));
 
-	int IPAddress;
-	if(!ParseIPAddress(IPString, &IPAddress)){
+	// TODO(fusion): Might not even allow empty ip string.
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -551,15 +552,16 @@ void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
 		SendQueryStatusError(Connection, 1);
 		return;
 	}
-	
+
+	// TODO(fusion): Might be `NO_BANISHMENT`.
 	if(GetCharacterRight(CharacterID, "NAMELOCK")){
 		SendQueryStatusError(Connection, 2);
 		return;
 	}
 
-	bool Approved;
-	if(GetNamelockStatus(CharacterID, &Approved)){
-		SendQueryStatusError(Connection, (Approved ? 4 : 3));
+	TNamelockStatus Status = GetNamelockStatus(CharacterID);
+	if(Status.Namelocked){
+		SendQueryStatusError(Connection, (Status.Approved ? 4 : 3));
 		return;
 	}
 
@@ -577,7 +579,80 @@ void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char CharacterName[30];
+	char IPString[16];
+	char Reason[200];
+	char Comment[200];
+	int GamemasterID = Buffer->Read16();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	Buffer->ReadString(IPString, sizeof(IPString));
+	Buffer->ReadString(Reason, sizeof(Reason));
+	Buffer->ReadString(Comment, sizeof(Comment));
+	bool FinalWarning = Buffer->ReadFlag();
+
+	// TODO(fusion): Might not even allow empty ip string.
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("BanishAccount");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = GetCharacterID(Connection->WorldID, CharacterName);
+	if(CharacterID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+
+	// TODO(fusion): Might be `NO_BANISHMENT`.
+	if(GetCharacterRight(CharacterID, "BANISHMENT")){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	TBanishmentStatus Status = GetBanishmentStatus(CharacterID);
+	if(Status.Banished){
+		SendQueryStatusError(Connection, 3);
+		return;
+	}
+
+	// TODO(fusion): We might want to add all these constants as config values.
+	int BanishmentID;
+	int Days = 7;
+	if(Status.FinalWarning){
+		Days = 0; // permanent
+		FinalWarning = false;
+	}else if(Status.TimesBanished >= 5 || FinalWarning){
+		Days = 30;
+		FinalWarning = true;
+	}
+
+	if(!InsertBanishment(CharacterID, IPAddress, GamemasterID,
+			Reason, Comment, FinalWarning, Days * 86400, &BanishmentID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.Write32((uint32)BanishmentID);
+	WriteBuffer.Write8(Days > 0 ? Days : 0xFF);
+	WriteBuffer.WriteFlag(FinalWarning);
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessSetNotationQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -1005,20 +1080,28 @@ void ProcessExcludeFromAuctionsQuery(TConnection *Connection, TReadBuffer *Buffe
 
 	int CharacterID = (int)Buffer->Read32();
 	bool Banish = Buffer->ReadFlag();
-	int Duration = 7 * 86400; // one week
+	int ExclusionDays = 7;
 	int BanishmentID = 0;
 	if(Banish){
-		Duration = 30 * 86400; // one month
-#if 0
-		// TODO(fusion): When banishment is implemented.
-		if(!BanishCharacterAccount(CharacterID, &BanishmentID, ..., "Spoiling Auction")){
+		bool FinalWarning = false;
+		int BanishmentDays = 7;
+		TBanishmentStatus Status = GetBanishmentStatus(CharacterID);
+		if(Status.FinalWarning){
+			BanishmentDays = 0; // permanent
+		}else if(Status.TimesBanished >= 5){
+			BanishmentDays = 30;
+			FinalWarning = true;
+		}
+
+		if(!InsertBanishment(CharacterID, 0, 0, "Spoiling Auction",
+				"", FinalWarning, BanishmentDays * 86400, &BanishmentID)){
 			SendQueryStatusFailed(Connection);
 			return;
 		}
-#endif
 	}
 
-	if(!ExcludeFromAuctions(Connection->WorldID, CharacterID, Duration, BanishmentID)){
+	if(!ExcludeFromAuctions(Connection->WorldID,
+			CharacterID, ExclusionDays * 86400, BanishmentID)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
