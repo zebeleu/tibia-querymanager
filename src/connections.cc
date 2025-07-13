@@ -481,10 +481,11 @@ void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
-	int WorldID = -1;
+	int WorldID = 0;
 	if(ApplicationType == APPLICATION_TYPE_GAME){
-		if(!LoadWorldID(LoginData, &WorldID)){
-			LOG_WARN("Invalid world name \"%s\"", LoginData);
+		WorldID = GetWorldID(LoginData);
+		if(WorldID == 0){
+			LOG_WARN("Unknown world name \"%s\"", LoginData);
 			SendQueryStatusFailed(Connection);
 			return;
 		}
@@ -518,7 +519,61 @@ void ProcessLogoutGameQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char CharacterName[30];
+	char IPString[16];
+	char Reason[200];
+	char Comment[200];
+	int GamemasterID = (int)Buffer->Read32();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	Buffer->ReadString(IPString, sizeof(IPString));
+	Buffer->ReadString(Reason, sizeof(Reason));
+	Buffer->ReadString(Comment, sizeof(Comment));
+
+	int IPAddress;
+	if(!ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("SetNamelock");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = GetCharacterID(Connection->WorldID, CharacterName);
+	if(CharacterID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+	
+	if(GetCharacterRight(CharacterID, "NAMELOCK")){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	bool Approved;
+	if(GetNamelockStatus(CharacterID, &Approved)){
+		SendQueryStatusError(Connection, (Approved ? 4 : 3));
+		return;
+	}
+
+	if(!InsertNamelock(CharacterID, IPAddress, GamemasterID, Reason, Comment)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -619,7 +674,7 @@ void ProcessEvictFreeAccountsQuery(TConnection *Connection, TReadBuffer *Buffer)
 	}
 
 	DynamicArray<THouseEviction> Evictions;
-	if(!LoadFreeAccountEvictions(Connection->WorldID, &Evictions)){
+	if(!GetFreeAccountEvictions(Connection->WorldID, &Evictions)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -641,7 +696,7 @@ void ProcessEvictDeletedCharactersQuery(TConnection *Connection, TReadBuffer *Bu
 	}
 
 	DynamicArray<THouseEviction> Evictions;
-	if(!LoadDeletedCharacterEvictions(Connection->WorldID, &Evictions)){
+	if(!GetDeletedCharacterEvictions(Connection->WorldID, &Evictions)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -669,15 +724,9 @@ void ProcessEvictExGuildleadersQuery(TConnection *Connection, TReadBuffer *Buffe
 	DynamicArray<int> Evictions;
 	int NumGuildHouses = Buffer->Read16();
 	for(int i = 0; i < NumGuildHouses; i += 1){
-		bool IsGuildLeader = false;
 		int HouseID = Buffer->Read16();
 		int OwnerID = (int)Buffer->Read32();
-		if(!CheckGuildLeaderStatus(Connection->WorldID, OwnerID, &IsGuildLeader)){
-			SendQueryStatusFailed(Connection);
-			return;
-		}
-
-		if(!IsGuildLeader){
+		if(!GetGuildLeaderStatus(Connection->WorldID, OwnerID)){
 			Evictions.Push(HouseID);
 		}
 	}
@@ -747,7 +796,7 @@ void ProcessGetHouseOwnersQuery(TConnection *Connection, TReadBuffer *Buffer){
 	}
 
 	DynamicArray<THouseOwner> Owners;
-	if(!LoadHouseOwners(Connection->WorldID, &Owners)){
+	if(!GetHouseOwners(Connection->WorldID, &Owners)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -771,7 +820,7 @@ void ProcessGetAuctionsQuery(TConnection *Connection, TReadBuffer *Buffer){
 	}
 
 	DynamicArray<int> Auctions;
-	if(!LoadHouseAuctions(Connection->WorldID, &Auctions)){
+	if(!GetHouseAuctions(Connection->WorldID, &Auctions)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -927,7 +976,7 @@ void ProcessLoadPlayersQuery(TConnection *Connection, TReadBuffer *Buffer){
 	int NumEntries;
 	TCharacterIndexEntry Entries[10000];
 	int MinimumCharacterID = (int)Buffer->Read32();
-	if(!LoadCharacterIndex(Connection->WorldID,
+	if(!GetCharacterIndexEntries(Connection->WorldID,
 			MinimumCharacterID, NARRAY(Entries), &NumEntries, Entries)){
 		SendQueryStatusFailed(Connection);
 		return;
@@ -1002,7 +1051,7 @@ void ProcessLoadWorldConfigQuery(TConnection *Connection, TReadBuffer *Buffer){
 	}
 
 	TWorldConfig WorldConfig = {};
-	if(!LoadWorldConfig(Connection->WorldID, &WorldConfig)){
+	if(!GetWorldConfig(Connection->WorldID, &WorldConfig)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}

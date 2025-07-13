@@ -129,6 +129,31 @@ bool StringCopy(char *Dest, int DestCapacity, const char *Src){
 	return StringCopyN(Dest, DestCapacity, Src, SrcLength);
 }
 
+bool ParseIPAddress(const char *String, int *OutAddr){
+	int Addr[4];
+	if(sscanf(String, "%d.%d.%d.%d", &Addr[0], &Addr[1], &Addr[2], &Addr[3]) != 4){
+		LOG_ERR("Invalid IP Address format \"%s\"", String);
+		return false;
+	}
+
+	if(Addr[0] < 0 || Addr[0] > 0xFF
+	|| Addr[1] < 0 || Addr[1] > 0xFF
+	|| Addr[2] < 0 || Addr[2] > 0xFF
+	|| Addr[3] < 0 || Addr[3] > 0xFF){
+		LOG_ERR("Invalid IP Address \"%s\"", String);
+		return false;
+	}
+
+	if(OutAddr){
+		*OutAddr = ((int)Addr[0] << 24)
+				| ((int)Addr[1] << 16)
+				| ((int)Addr[2] << 8)
+				| ((int)Addr[3] << 0);
+	}
+
+	return true;
+}
+
 bool ReadBooleanConfig(bool *Dest, const char *Val){
 	ASSERT(Dest && Val);
 	*Dest = StringEqCI(Val, "true");

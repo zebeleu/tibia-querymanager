@@ -102,6 +102,7 @@ bool StringEq(const char *A, const char *B);
 bool StringEqCI(const char *A, const char *B);
 bool StringCopyN(char *Dest, int DestCapacity, const char *Src, int SrcLength);
 bool StringCopy(char *Dest, int DestCapacity, const char *Src);
+bool ParseIPAddress(const char *String, int *OutAddr);
 
 bool ReadBooleanConfig(bool *Dest, const char *Val);
 bool ReadIntegerConfig(int *Dest, const char *Val);
@@ -720,30 +721,43 @@ public:
 	bool Commit(void);
 };
 
-bool LoadWorldID(const char *WorldName, int *WorldID);
+// NOTE(fusion): Primary tables.
+int GetWorldID(const char *WorldName);
+bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig);
+int GetCharacterID(int WorldID, const char *CharacterName);
+bool GetCharacterRight(int CharacterID, const char *Right);
+bool GetGuildLeaderStatus(int WorldID, int CharacterID);
 bool DecrementIsOnline(int WorldID, int CharacterID);
+bool ClearIsOnline(int WorldID, int *NumAffectedCharacters);
+bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
+		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
+
+// NOTE(fusion): House tables.
 bool FinishHouseAuctions(int WorldID, DynamicArray<THouseAuction> *Auctions);
 bool FinishHouseTransfers(int WorldID, DynamicArray<THouseTransfer> *Transfers);
-bool LoadFreeAccountEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions);
-bool LoadDeletedCharacterEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions);
-bool CheckGuildLeaderStatus(int WorldID, int CharacterID, bool *IsGuildLeader);
+bool GetFreeAccountEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions);
+bool GetDeletedCharacterEvictions(int WorldID, DynamicArray<THouseEviction> *Evictions);
 bool InsertHouseOwner(int WorldID, int HouseID, int OwnerID, int PaidUntil);
 bool UpdateHouseOwner(int WorldID, int HouseID, int OwnerID, int PaidUntil);
 bool DeleteHouseOwner(int WorldID, int HouseID);
-bool LoadHouseOwners(int WorldID, DynamicArray<THouseOwner> *Owners);
-bool LoadHouseAuctions(int WorldID, DynamicArray<int> *Auctions);
+bool GetHouseOwners(int WorldID, DynamicArray<THouseOwner> *Owners);
+bool GetHouseAuctions(int WorldID, DynamicArray<int> *Auctions);
 bool StartHouseAuction(int WorldID, int HouseID);
 bool DeleteHouses(int WorldID);
 bool InsertHouses(int WorldID, int NumHouses, THouse *Houses);
-bool ClearIsOnline(int WorldID, int *NumAffectedCharacters);
+bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID);
+
+// NOTE(fusion): Banishment tables.
+bool GetNamelockStatus(int CharacterID, bool *Approved);
+bool InsertNamelock(int CharacterID, int IPAddress,
+		int GamemasterID, const char *Reason, const char *Comment);
+
+// NOTE(fusion): Info tables.
 bool DeleteOnlineCharacters(int WorldID);
 bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Characters);
 bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord);
-bool LoadCharacterIndex(int WorldID, int MinimumCharacterID,
-		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
-bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID);
-bool LoadWorldConfig(int WorldID, TWorldConfig *WorldConfig);
 
+// NOTE(fusion): Internal database utility and initialization.
 bool FileExists(const char *FileName);
 bool ExecFile(const char *FileName);
 bool ExecInternal(const char *Format, ...) ATTR_PRINTF(1, 2);
