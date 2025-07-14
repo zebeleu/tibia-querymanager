@@ -602,7 +602,7 @@ void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessSetNotationQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessReportStatementQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessBanishIpAddressQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessBanishIPAddressQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessLogCharacterDeathQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessAddBuddyQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessRemoveBuddyQuery(TConnection *Connection, TReadBuffer *Buffer);
@@ -714,6 +714,14 @@ struct TBanishmentStatus{
 	int TimesBanished;
 };
 
+struct TStatement{
+	int Timestamp;
+	int StatementID;
+	int CharacterID;
+	char Channel[30];
+	char Text[256];
+};
+
 struct TOnlineCharacter{
 	char Name[30];
 	int Level;
@@ -743,6 +751,10 @@ bool DecrementIsOnline(int WorldID, int CharacterID);
 bool ClearIsOnline(int WorldID, int *NumAffectedCharacters);
 bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
+bool InsertCharacterDeath(int WorldID, int CharacterID, int Level,
+		int OffenderID, const char *Remark, bool Unjustified, int Timestamp);
+bool InsertBuddy(int WorldID, int AccountID, int BuddyID);
+bool DeleteBuddy(int WorldID, int AccountID, int BuddyID);
 
 // NOTE(fusion): House tables.
 bool FinishHouseAuctions(int WorldID, DynamicArray<THouseAuction> *Auctions);
@@ -761,12 +773,22 @@ bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int Banishm
 
 // NOTE(fusion): Banishment tables.
 TNamelockStatus GetNamelockStatus(int CharacterID);
-bool InsertNamelock(int CharacterID, int IPAddress,
-		int GamemasterID, const char *Reason, const char *Comment);
+bool InsertNamelock(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment);
 TBanishmentStatus GetBanishmentStatus(int CharacterID);
-bool InsertBanishment(int CharacterID, int IPAddress,
-		int GamemasterID, const char *Reason, const char *Comment,
-		bool FinalWarning, int Duration, int *BanishmentID);
+bool InsertBanishment(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment, bool FinalWarning,
+		int Duration, int *BanishmentID);
+int GetNotationCount(int CharacterID);
+bool InsertNotation(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment);
+bool InsertIPBanishment(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment, int Duration);
+
+bool IsStatementReported(int WorldID, TStatement *Statement);
+bool InsertStatements(int WorldID, int NumStatements, TStatement *Statements);
+bool InsertReportedStatement(int WorldID, TStatement *Statement, int BanishmentID,
+		int ReporterID, const char *Reason, const char *Comment);
 
 // NOTE(fusion): Info tables.
 bool DeleteOnlineCharacters(int WorldID);

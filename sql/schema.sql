@@ -47,22 +47,36 @@ CREATE INDEX IF NOT EXISTS CharactersAccountIndex
 CREATE INDEX IF NOT EXISTS CharactersGuildIndex
 		ON Characters(Guild, Rank);
 
-CREATE TABLE IF NOT EXISTS CharacterBuddies (
-	CharacterID INTEGER NOT NULL,
-	BuddyID INTEGER NOT NULL,
-	PRIMARY KEY (CharacterID, BuddyID)
-);
-
-CREATE TABLE IF NOT EXISTS CharacterInvitations (
-	WorldID INTEGER NOT NULL,
-	CharacterID INTEGER NOT NULL,
-	PRIMARY KEY (WorldID, CharacterID)
-);
-
 CREATE TABLE IF NOT EXISTS CharacterRights (
 	CharacterID INTEGER NOT NULL,
 	Right TEXT NOT NULL COLLATE NOCASE,
 	PRIMARY KEY(CharacterID, Right)
+);
+
+CREATE TABLE IF NOT EXISTS CharacterDeaths (
+	CharacterID INTEGER NOT NULL,
+	Level INTEGER NOT NULL,
+	OffenderID INTEGER NOT NULL,
+	Remark TEXT NOT NULL,
+	Unjustified INTEGER NOT NULL,
+	Timestamp INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS CharacterDeathsCharacterIndex
+		ON CharacterDeaths(CharacterID, Level);
+CREATE INDEX IF NOT EXISTS CharacterDeathsOffenderIndex
+		ON CharacterDeaths(OffenderID, Unjustified);
+
+CREATE TABLE IF NOT EXISTS Buddies (
+	WorldID INTEGER NOT NULL,
+	AccountID INTEGER NOT NULL,
+	BuddyID INTEGER NOT NULL,
+	PRIMARY KEY (WorldID, AccountID, BuddyID)
+);
+
+CREATE TABLE IF NOT EXISTS WorldInvitations (
+	WorldID INTEGER NOT NULL,
+	CharacterID INTEGER NOT NULL,
+	PRIMARY KEY (WorldID, CharacterID)
 );
 
 -- House Tables
@@ -112,6 +126,7 @@ CREATE TABLE IF NOT EXISTS HouseTransfers (
 
 CREATE TABLE IF NOT EXISTS HouseAuctionExclusions (
 	CharacterID INTEGER NOT NULL,
+	Issued INTEGER NOT NULL,
 	Until INTEGER NOT NULL,
 	BanishmentID INTEGER NOT NULL
 );
@@ -146,17 +161,22 @@ CREATE TABLE IF NOT EXISTS Banishments (
 	Until INTEGER NOT NULL,
 	PRIMARY KEY (BanishmentID)
 );
-CREATE INDEX IF NOT EXISTS BanishmentsAccount
+CREATE INDEX IF NOT EXISTS BanishmentsAccountIndex
 		ON Banishments(AccountID, Until, FinalWarning);
 
 CREATE TABLE IF NOT EXISTS IPBanishments (
-	IPAddress INTEGER NOT NULL,
 	CharacterID INTEGER NOT NULL,
+	IPAddress INTEGER NOT NULL,
 	GamemasterID INTEGER NOT NULL,
 	Reason TEXT NOT NULL,
 	Comment TEXT NOT NULL,
-	PRIMARY KEY (IPAddress)
+	Issued INTEGER NOT NULL,
+	Until INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS IPBanishmentsAddressIndex
+		ON IPBanishments(IPAddress);
+CREATE INDEX IF NOT EXISTS IPBanishmentsCharacterIndex
+		ON IPBanishments(CharacterID);
 
 CREATE TABLE IF NOT EXISTS Namelocks (
 	CharacterID INTEGER NOT NULL,
@@ -179,20 +199,33 @@ CREATE TABLE IF NOT EXISTS Notations (
 CREATE INDEX IF NOT EXISTS NotationsCharacterIndex
 		ON Notations(CharacterID);
 
-CREATE TABLE IF NOT EXISTS ReportedStatements (
+CREATE TABLE IF NOT EXISTS Statements (
+	WorldID INTEGER NOT NULL,
 	Timestamp INTEGER NOT NULL,
 	StatementID INTEGER NOT NULL,
 	CharacterID INTEGER NOT NULL,
-	Statement TEXT NOT NULL,
-	Context TEXT NOT NULL,
+	Channel TEXT NOT NULL,
+	Text TEXT NOT NULL,
+	PRIMARY KEY (WorldID, Timestamp, StatementID)
+);
+CREATE INDEX IF NOT EXISTS StatementsCharacterIndex
+		ON Statements(CharacterID, Timestamp);
+
+CREATE TABLE IF NOT EXISTS ReportedStatements (
+	WorldID INTEGER NOT NULL,
+	Timestamp INTEGER NOT NULL,
+	StatementID INTEGER NOT NULL,
+	CharacterID INTEGER NOT NULL,
 	BanishmentID INTEGER NOT NULL,
 	ReporterID INTEGER NOT NULL,
 	Reason TEXT NOT NULL,
 	Comment TEXT NOT NULL,
-	PRIMARY KEY (Timestamp, StatementID)
+	PRIMARY KEY (WorldID, Timestamp, StatementID)
 );
 CREATE INDEX IF NOT EXISTS ReportedStatementsCharacterIndex
 		ON ReportedStatements(CharacterID, Timestamp);
+CREATE INDEX IF NOT EXISTS ReportedStatementsBanishmentIndex
+		ON ReportedStatements(BanishmentID);
 
 -- Info Tables
 --==============================================================================

@@ -308,6 +308,7 @@ bool DecrementIsOnline(int WorldID, int CharacterID){
 }
 
 bool ClearIsOnline(int WorldID, int *NumAffectedCharacters){
+	ASSERT(NumAffectedCharacters != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"UPDATE Characters SET IsOnline = 0"
 			" WHERE WorldID = ?1 AND IsOnline != 0");
@@ -365,6 +366,92 @@ bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 	}
 
 	*NumEntries = EntryIndex;
+	return true;
+}
+
+bool InsertCharacterDeath(int WorldID, int CharacterID, int Level,
+		int OffenderID, const char *Remark, bool Unjustified, int Timestamp){
+	// NOTE(fusion): Same as `DecrementIsOnline`.
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO CharacterDeaths (CharacterID, Level,"
+				" OffenderID, Remark, Unjustified, Timestamp)"
+			" SELECT ?2, ?3, ?4, ?5, ?6, ?7 FROM Characters"
+				" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)               != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID)           != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, Level)                 != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 4, OffenderID)            != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 5, Remark, -1, NULL)     != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 6, (Unjustified ? 1 : 0)) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 7, Timestamp)             != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
+}
+
+bool InsertBuddy(int WorldID, int AccountID, int BuddyID){
+	// NOTE(fusion): Same as `DecrementIsOnline`.
+	// NOTE(fusion): Use the `IGNORE` conflict resolution to make duplicate row
+	// errors appear as successful insertions.
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT OR IGNORE INTO Buddies (WorldID, AccountID, BuddyID)"
+			" SELECT ?1, ?2, ?3 FROM Characters"
+				" WHERE WorldID = ?1 AND CharacterID = ?3");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, AccountID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, BuddyID)   != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool DeleteBuddy(int WorldID, int AccountID, int BuddyID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"DELETE FROM Buddies"
+			" WHERE WorldID = ?1 AND AccountID = ?2 AND BuddyID = ?3");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, AccountID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, BuddyID)   != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	// NOTE(fusion): Always return true here even if there were no deleted rows
+	// to make them appear as successful deletions.
 	return true;
 }
 
@@ -689,6 +776,7 @@ bool DeleteHouses(int WorldID){
 }
 
 bool InsertHouses(int WorldID, int NumHouses, THouse *Houses){
+	ASSERT(NumHouses > 0 && Houses != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"INSERT INTO Houses (WorldID, HouseID, Name, Rent, Description,"
 				" Size, PositionX, PositionY, PositionZ, Town, GuildHouse)"
@@ -734,8 +822,8 @@ bool InsertHouses(int WorldID, int NumHouses, THouse *Houses){
 bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID){
 	// NOTE(fusion): Same as `DecrementIsOnline`.
 	sqlite3_stmt *Stmt = PrepareQuery(
-			"INSERT INTO HouseAuctionExclusions (CharacterID, Until, BanishmentID)"
-			" SELECT CharacterID, (UNIXEPOCH() + ?3), ?4 FROM Characters"
+			"INSERT INTO HouseAuctionExclusions (CharacterID, Issued, Until, BanishmentID)"
+			" SELECT ?2, UNIXEPOCH(), (UNIXEPOCH() + ?3), ?4 FROM Characters"
 				" WHERE WorldID = ?1 AND CharacterID = ?2");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
@@ -787,8 +875,8 @@ TNamelockStatus GetNamelockStatus(int CharacterID){
 	return Status;
 }
 
-bool InsertNamelock(int CharacterID, int IPAddress,
-		int GamemasterID, const char *Reason, const char *Comment){
+bool InsertNamelock(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment){
 	ASSERT(Reason != NULL && Comment != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"INSERT INTO Namelocks (CharacterID, IPAddress, GamemasterID, Reason, Comment)"
@@ -852,17 +940,15 @@ TBanishmentStatus GetBanishmentStatus(int CharacterID){
 	return Status;
 }
 
-bool InsertBanishment(int CharacterID, int IPAddress,
-		int GamemasterID, const char *Reason, const char *Comment,
-		bool FinalWarning, int Duration, int *BanishmentID){
-	// TODO(fusion): Not sure if I like these insertions with subqueries. We might
-	// as well just get the account id before hand.
-	ASSERT(BanishmentID);
+bool InsertBanishment(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment, bool FinalWarning,
+		int Duration, int *BanishmentID){
+	ASSERT(Reason != NULL && Comment != NULL && BanishmentID != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"INSERT INTO Banishments (AccountID, IPAddress, GamemasterID,"
 				" Reason, Comment, FinalWarning, Issued, Until)"
-			" VALUES ((SELECT AccountID FROM Characters WHERE CharacterID = ?1),"
-				" ?2, ?3, ?4, ?5, ?6, UNIXEPOCH(), UNIXEPOCH() + ?7)"
+			" SELECT AccountID, ?2, ?3, ?4, ?5, ?6, UNIXEPOCH(), UNIXEPOCH() + ?7"
+				" FROM Characters WHERE CharacterID = ?1"
 			" RETURNING BanishmentID");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
@@ -886,6 +972,192 @@ bool InsertBanishment(int CharacterID, int IPAddress,
 	}
 
 	*BanishmentID = sqlite3_column_int(Stmt, 0);
+	return true;
+}
+
+int GetNotationCount(int CharacterID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT COUNT(*) FROM Notations WHERE CharacterID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return 0;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_ROW){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	return sqlite3_column_int(Stmt, 0);
+}
+
+bool InsertNotation(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment){
+	ASSERT(Reason != NULL && Comment != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO Notations (CharacterID, IPAddress,"
+				" GamemasterID, Reason, Comment)"
+			" VALUES (?1, ?2, ?3, ?4, ?5)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID)        != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, IPAddress)          != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, GamemasterID)       != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 4, Reason, -1, NULL)  != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 5, Comment, -1, NULL) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool InsertIPBanishment(int CharacterID, int IPAddress, int GamemasterID,
+		const char *Reason, const char *Comment, int Duration){
+	ASSERT(Reason != NULL && Comment != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO IPBanishments (CharacterID, IPAddress,"
+				" GamemasterID, Reason, Comment, Issued, Until)"
+			" VALUES (?1, ?2, ?3, ?4, ?5, UNIXEPOCH(), UNIXEPOCH() + ?6)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID)        != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, IPAddress)          != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, GamemasterID)       != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 4, Reason, -1, NULL)  != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 5, Comment, -1, NULL) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 6, Duration)           != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool IsStatementReported(int WorldID, TStatement *Statement){
+	ASSERT(Statement != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT 1 FROM Statements"
+			" WHERE WorldID = ?1 AND Timestamp = ?2 AND StatementID = ?3");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return 0;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)                != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, Statement->Timestamp)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, Statement->StatementID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return (ErrorCode == SQLITE_ROW);
+}
+
+bool InsertStatements(int WorldID, int NumStatements, TStatement *Statements){
+	// NOTE(fusion): Use the `IGNORE` conflict resolution because different
+	// reports may include the same statements for context and I assume it's
+	// not uncommon to see overlaps.
+	ASSERT(NumStatements > 0 && Statements != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT OR IGNORE INTO Statements (WorldID, Timestamp,"
+				" StatementID, CharacterID, Channel, Text)"
+			" VALUES (?1, ?2, ?3, ?4, ?5, ?6)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("Failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	for(int i = 0; i < NumStatements; i += 1){
+		if(Statements[i].StatementID == 0){
+			LOG_WARN("Skipping statement without id");
+			continue;
+		}
+
+		if(sqlite3_bind_int(Stmt, 2, Statements[i].Timestamp)          != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 3, Statements[i].StatementID)        != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 4, Statements[i].CharacterID)        != SQLITE_OK
+		|| sqlite3_bind_text(Stmt, 5, Statements[i].Channel, -1, NULL) != SQLITE_OK
+		|| sqlite3_bind_text(Stmt, 6, Statements[i].Text, -1, NULL)    != SQLITE_OK){
+			LOG_ERR("Failed to bind parameters for statement %d: %s",
+					Statements[i].StatementID, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		if(sqlite3_step(Stmt) != SQLITE_DONE){
+			LOG_ERR("Failed to insert statement %d: %s",
+					Statements[i].StatementID, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		sqlite3_reset(Stmt);
+	}
+
+	return true;
+}
+
+bool InsertReportedStatement(int WorldID, TStatement *Statement, int BanishmentID,
+		int ReporterID, const char *Reason, const char *Comment){
+	ASSERT(Statement != NULL && Reason != NULL && Comment != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO ReportedStatements (WorldID, Timestamp,"
+				" StatementID, CharacterID, BanishmentID, ReporterID,"
+				" Reason, Comment)"
+			" VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)                != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, Statement->Timestamp)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, Statement->StatementID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 4, Statement->CharacterID) != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 5, BanishmentID)           != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 6, ReporterID)             != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 7, Reason, -1, NULL)      != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 8, Comment, -1, NULL)     != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
 	return true;
 }
 

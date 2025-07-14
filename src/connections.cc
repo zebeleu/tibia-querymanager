@@ -402,6 +402,22 @@ void ExitConnections(void){
 
 // Connection Queries
 //==============================================================================
+void CompoundBanishment(TBanishmentStatus Status, int *Days, bool *FinalWarning){
+	// TODO(fusion): We might want to add all these constants as config values.
+	ASSERT(Days != NULL && FinalWarning != NULL);
+	if(Status.FinalWarning){
+		*FinalWarning = false;
+		*Days = 0; // permanent
+	}else if(Status.TimesBanished > 5 || *FinalWarning){
+		*FinalWarning = true;
+		if(*Days < 30){
+			*Days = 30;
+		}else{
+			*Days *= 2;
+		}
+	}
+}
+
 TWriteBuffer PrepareResponse(TConnection *Connection, int Status){
 	if(Connection->State != CONNECTION_PROCESSING){
 		LOG_ERR("Connection %s is not processing query (State: %d)",
@@ -534,7 +550,6 @@ void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
 	Buffer->ReadString(Reason, sizeof(Reason));
 	Buffer->ReadString(Comment, sizeof(Comment));
 
-	// TODO(fusion): Might not even allow empty ip string.
 	int IPAddress = 0;
 	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
@@ -588,14 +603,13 @@ void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
 	char IPString[16];
 	char Reason[200];
 	char Comment[200];
-	int GamemasterID = Buffer->Read16();
+	int GamemasterID = (int)Buffer->Read32();
 	Buffer->ReadString(CharacterName, sizeof(CharacterName));
 	Buffer->ReadString(IPString, sizeof(IPString));
 	Buffer->ReadString(Reason, sizeof(Reason));
 	Buffer->ReadString(Comment, sizeof(Comment));
 	bool FinalWarning = Buffer->ReadFlag();
 
-	// TODO(fusion): Might not even allow empty ip string.
 	int IPAddress = 0;
 	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
@@ -626,17 +640,9 @@ void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
-	// TODO(fusion): We might want to add all these constants as config values.
-	int BanishmentID;
+	int BanishmentID = 0;
 	int Days = 7;
-	if(Status.FinalWarning){
-		Days = 0; // permanent
-		FinalWarning = false;
-	}else if(Status.TimesBanished >= 5 || FinalWarning){
-		Days = 30;
-		FinalWarning = true;
-	}
-
+	CompoundBanishment(Status, &Days, &FinalWarning);
 	if(!InsertBanishment(CharacterID, IPAddress, GamemasterID,
 			Reason, Comment, FinalWarning, Days * 86400, &BanishmentID)){
 		SendQueryStatusFailed(Connection);
@@ -656,27 +662,277 @@ void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessSetNotationQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char CharacterName[30];
+	char IPString[16];
+	char Reason[200];
+	char Comment[200];
+	int GamemasterID = Buffer->Read32();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	Buffer->ReadString(IPString, sizeof(IPString));
+	Buffer->ReadString(Reason, sizeof(Reason));
+	Buffer->ReadString(Comment, sizeof(Comment));
+
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("SetNotation");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = GetCharacterID(Connection->WorldID, CharacterName);
+	if(CharacterID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+
+	// TODO(fusion): Might be `NO_BANISHMENT`.
+	if(!GetCharacterRight(CharacterID, "NOTATION")){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	int BanishmentID = 0;
+	if(GetNotationCount(CharacterID) >= 5){
+		int BanishmentDays = 7;
+		bool FinalWarning = false;
+		TBanishmentStatus Status = GetBanishmentStatus(CharacterID);
+		CompoundBanishment(Status, &BanishmentDays, &FinalWarning);
+		if(!InsertBanishment(CharacterID, IPAddress, 0, "Excessive Notations",
+				"", FinalWarning, BanishmentDays, &BanishmentID)){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+	}
+
+	if(!InsertNotation(CharacterID, IPAddress, GamemasterID, Reason, Comment)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.Write32((uint32)BanishmentID);
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessReportStatementQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char CharacterName[30];
+	char Reason[200];
+	char Comment[200];
+	int ReporterID = Buffer->Read32();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	Buffer->ReadString(Reason, sizeof(Reason));
+	Buffer->ReadString(Comment, sizeof(Comment));
+	int BanishmentID = Buffer->Read32();
+	int StatementID = Buffer->Read32();
+	int NumStatements = Buffer->Read16();
+
+	if(StatementID == 0){
+		LOG_ERR("Missing reported statement id");
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(NumStatements == 0){
+		LOG_ERR("Missing report statements");
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TStatement *ReportedStatement = NULL;
+	TStatement *Statements = (TStatement*)alloca(NumStatements * sizeof(TStatement));
+	for(int i = 0; i < NumStatements; i += 1){
+		Statements[i].StatementID = (int)Buffer->Read32();
+		Statements[i].Timestamp = (int)Buffer->Read32();
+		Statements[i].CharacterID = (int)Buffer->Read32();
+		Buffer->ReadString(Statements[i].Channel, sizeof(Statements[i].Channel));
+		Buffer->ReadString(Statements[i].Text, sizeof(Statements[i].Text));
+
+		if(Statements[i].StatementID == StatementID){
+			if(ReportedStatement != NULL){
+				LOG_WARN("Reported statement (%d, %d, %d) appears multiple times",
+						Connection->WorldID, Statements[i].Timestamp,
+						Statements[i].StatementID);
+			}
+			ReportedStatement = &Statements[i];
+		}
+	}
+
+	if(ReportedStatement == NULL){
+		LOG_ERR("Missing reported statement");
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("ReportStatement");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = GetCharacterID(Connection->WorldID, CharacterName);
+	if(CharacterID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}else if(ReportedStatement->CharacterID != CharacterID){
+		LOG_ERR("Reported statement character mismatch");
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(IsStatementReported(Connection->WorldID, ReportedStatement)){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	if(!InsertStatements(Connection->WorldID, NumStatements, Statements)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!InsertReportedStatement(Connection->WorldID, ReportedStatement,
+			BanishmentID, ReporterID, Reason, Comment)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
-void ProcessBanishIpAddressQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+void ProcessBanishIPAddressQuery(TConnection *Connection, TReadBuffer *Buffer){
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char CharacterName[30];
+	char IPString[16];
+	char Reason[200];
+	char Comment[200];
+	int GamemasterID = Buffer->Read16();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	Buffer->ReadString(IPString, sizeof(IPString));
+	Buffer->ReadString(Reason, sizeof(Reason));
+	Buffer->ReadString(Comment, sizeof(Comment));
+
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("BanishIP");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int CharacterID = GetCharacterID(Connection->WorldID, CharacterName);
+	if(CharacterID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+
+	// TODO(fusion): Might be `NO_BANISHMENT`.
+	if(!GetCharacterRight(CharacterID, "IP_BANISHMENT")){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	// IMPORTANT(fusion): It is not a good idea to ban an IP address, specially
+	// V4 addresses, as they may be dynamically assigned or represent the address
+	// of a public ISP router that manages multiple clients.
+	int BanishmentDays = 3;
+	if(!InsertIPBanishment(CharacterID, IPAddress, GamemasterID,
+			Reason, Comment, BanishmentDays * 86400)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessLogCharacterDeathQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char Remark[30];
+	int CharacterID = (int)Buffer->Read32();
+	int Level = Buffer->Read16();
+	int OffenderID = (int)Buffer->Read32();
+	Buffer->ReadString(Remark, sizeof(Remark));
+	bool Unjustified = Buffer->ReadFlag();
+	int Timestamp = (int)Buffer->Read32();
+	if(!InsertCharacterDeath(Connection->WorldID, CharacterID, Level,
+			OffenderID, Remark, Unjustified, Timestamp)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessAddBuddyQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int AccountID = (int)Buffer->Read32();
+	int BuddyID = (int)Buffer->Read32();
+	if(!InsertBuddy(Connection->WorldID, AccountID, BuddyID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessRemoveBuddyQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int AccountID = (int)Buffer->Read32();
+	int BuddyID = (int)Buffer->Read32();
+	if(!DeleteBuddy(Connection->WorldID, AccountID, BuddyID)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessDecrementIsOnlineQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -930,7 +1186,7 @@ void ProcessInsertHousesQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
-	TransactionScope Tx("UpdateHouses");
+	TransactionScope Tx("InsertHouses");
 	if(!Tx.Begin()){
 		SendQueryStatusFailed(Connection);
 		return;
@@ -1083,16 +1339,10 @@ void ProcessExcludeFromAuctionsQuery(TConnection *Connection, TReadBuffer *Buffe
 	int ExclusionDays = 7;
 	int BanishmentID = 0;
 	if(Banish){
-		bool FinalWarning = false;
 		int BanishmentDays = 7;
+		bool FinalWarning = false;
 		TBanishmentStatus Status = GetBanishmentStatus(CharacterID);
-		if(Status.FinalWarning){
-			BanishmentDays = 0; // permanent
-		}else if(Status.TimesBanished >= 5){
-			BanishmentDays = 30;
-			FinalWarning = true;
-		}
-
+		CompoundBanishment(Status, &BanishmentDays, &FinalWarning);
 		if(!InsertBanishment(CharacterID, 0, 0, "Spoiling Auction",
 				"", FinalWarning, BanishmentDays * 86400, &BanishmentID)){
 			SendQueryStatusFailed(Connection);
@@ -1243,7 +1493,7 @@ void ProcessConnectionQuery(TConnection *Connection){
 		case QUERY_BANISH_ACCOUNT:				ProcessBanishAccountQuery(Connection, &Buffer); break;
 		case QUERY_SET_NOTATION:				ProcessSetNotationQuery(Connection, &Buffer); break;
 		case QUERY_REPORT_STATEMENT:			ProcessReportStatementQuery(Connection, &Buffer); break;
-		case QUERY_BANISH_IP_ADDRESS:			ProcessBanishIpAddressQuery(Connection, &Buffer); break;
+		case QUERY_BANISH_IP_ADDRESS:			ProcessBanishIPAddressQuery(Connection, &Buffer); break;
 		case QUERY_LOG_CHARACTER_DEATH:			ProcessLogCharacterDeathQuery(Connection, &Buffer); break;
 		case QUERY_ADD_BUDDY:					ProcessAddBuddyQuery(Connection, &Buffer); break;
 		case QUERY_REMOVE_BUDDY:				ProcessRemoveBuddyQuery(Connection, &Buffer); break;
