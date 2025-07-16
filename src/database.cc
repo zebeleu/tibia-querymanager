@@ -198,6 +198,88 @@ bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig){
 	return true;
 }
 
+bool GetAccountData(int AccountID, TAccountData *Account){
+	ASSERT(Account != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT AccountID, Email, Auth, (PremiumEnd >= UNIXEPOCH()), PendingPremiumDays"
+		" FROM Accounts WHERE AccountID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID) != SQLITE_OK){
+		LOG_ERR("Failed to bind AccountID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	memset(Account, 0, sizeof(TAccountData));
+	if(ErrorCode == SQLITE_ROW){
+		Account->AccountID = sqlite3_column_int(Stmt, 0);
+		StringCopy(Account->Email, sizeof(Account->Email),
+				(const char*)sqlite3_column_text(Stmt, 1));
+		if(sqlite3_column_bytes(Stmt, 2) == sizeof(Account->Auth)){
+			memcpy(Account->Auth, sqlite3_column_blob(Stmt, 2), sizeof(Account->Auth));
+		}
+		Account->Premium = (sqlite3_column_int(Stmt, 3) != 0);
+		Account->PendingPremiumDays = sqlite3_column_int(Stmt, 4);
+	}
+
+	return true;
+}
+
+int GetAccountOnlineCharacters(int AccountID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT COUNT(*) FROM Characters"
+		" WHERE AccountID = ?1 AND IsOnline != 0");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return 0;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID) != SQLITE_OK){
+		LOG_ERR("Failed to bind AccountID: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_ROW){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	return sqlite3_column_int(Stmt, 0);
+}
+
+bool ActivatePendingPremiumDays(int AccountID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"UPDATE Accounts"
+		" SET PremiumEnd = MAX(PremiumEnd, UNIXEPOCH()) + PendingPremiumDays * 86400,"
+			" PendingPremiumDays = 0"
+		" WHERE AccountID = ?1 AND PendingPremiumDays > 0");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID) != SQLITE_OK){
+		LOG_ERR("Failed to bind AccountID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
 int GetCharacterID(int WorldID, const char *CharacterName){
 	ASSERT(CharacterName != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
@@ -223,6 +305,48 @@ int GetCharacterID(int WorldID, const char *CharacterName){
 	return (ErrorCode == SQLITE_ROW ? sqlite3_column_int(Stmt, 0) : 0);
 }
 
+bool GetCharacterData(const char *CharacterName, TCharacterData *Character){
+	ASSERT(CharacterName != NULL && Character != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT WorldID, CharacterID, AccountID, Name,"
+				" Sex, Guild, Rank, Title, Deleted"
+			" FROM Characters WHERE Name = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return 0;
+	}
+
+	if(sqlite3_bind_text(Stmt, 1, CharacterName, -1, NULL) != SQLITE_OK){
+		LOG_ERR("Failed to bind CharacterName: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return 0;
+	}
+
+	memset(Character, 0, sizeof(TCharacterData));
+	if(ErrorCode == SQLITE_ROW){
+		Character->WorldID = sqlite3_column_int(Stmt, 0);
+		Character->CharacterID = sqlite3_column_int(Stmt, 1);
+		Character->AccountID = sqlite3_column_int(Stmt, 2);
+		StringCopy(Character->Name, sizeof(Character->Name),
+				(const char*)sqlite3_column_text(Stmt, 3));
+		Character->Sex = sqlite3_column_int(Stmt, 4);
+		StringCopy(Character->Guild, sizeof(Character->Guild),
+				(const char*)sqlite3_column_text(Stmt, 5));
+		StringCopy(Character->Rank, sizeof(Character->Rank),
+				(const char*)sqlite3_column_text(Stmt, 6));
+		StringCopy(Character->Title, sizeof(Character->Title),
+				(const char*)sqlite3_column_text(Stmt, 7));
+		Character->Deleted = sqlite3_column_int(Stmt, 8);
+	}
+
+	return true;
+}
+
 bool GetCharacterRight(int CharacterID, const char *Right){
 	ASSERT(Right != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
@@ -246,6 +370,35 @@ bool GetCharacterRight(int CharacterID, const char *Right){
 	}
 
 	return (ErrorCode == SQLITE_ROW);
+}
+
+bool GetCharacterRights(int CharacterID, DynamicArray<TCharacterRight> *Rights){
+	ASSERT(Rights != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT Right FROM CharacterRights WHERE CharacterID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind CharacterID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		TCharacterRight Right = {};
+		StringCopy(Right.Name, sizeof(Right.Name),
+				(const char*)sqlite3_column_text(Stmt, 0));
+		Rights->Push(Right);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
 }
 
 bool GetGuildLeaderStatus(int WorldID, int CharacterID){
@@ -279,6 +432,30 @@ bool GetGuildLeaderStatus(int WorldID, int CharacterID){
 		}
 	}
 	return Result;
+}
+
+bool IncrementIsOnline(int WorldID, int CharacterID){
+	// NOTE(fusion): Same as `DecrementIsOnline`
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"UPDATE Characters SET IsOnline = IsOnline + 1"
+			" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)     != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
 }
 
 bool DecrementIsOnline(int WorldID, int CharacterID){
@@ -331,6 +508,43 @@ bool ClearIsOnline(int WorldID, int *NumAffectedCharacters){
 	return true;
 }
 
+bool LogoutCharacter(int WorldID, int CharacterID, int Level,
+		const char *Profession, const char *Residence, int LastLoginTime,
+		int TutorActivities){
+	ASSERT(Profession != NULL && Residence != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"UPDATE Characters"
+			" SET Level = ?3,"
+				" Profession = ?4,"
+				" Residence = ?5,"
+				" LastLoginTime = ?6,"
+				" TutorActivities = ?7"
+				" IsOnline = IsOnline - 1"
+			" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)               != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID)           != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, Level)                 != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 4, Profession, -1, NULL) != SQLITE_OK
+	|| sqlite3_bind_text(Stmt, 5, Residence, -1, NULL)  != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 6, LastLoginTime)         != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 7, TutorActivities)       != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_changes(g_Database) > 0;
+}
+
 bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries){
 	ASSERT(MaxEntries > 0 && NumEntries != NULL && Entries != NULL);
@@ -357,7 +571,7 @@ bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 		Entries[EntryIndex].CharacterID = sqlite3_column_int(Stmt, 0);
 		StringCopy(Entries[EntryIndex].Name,
 				sizeof(Entries[EntryIndex].Name),
-				(const char *)sqlite3_column_text(Stmt, 1));
+				(const char*)sqlite3_column_text(Stmt, 1));
 	}
 
 	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
@@ -371,6 +585,7 @@ bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 
 bool InsertCharacterDeath(int WorldID, int CharacterID, int Level,
 		int OffenderID, const char *Remark, bool Unjustified, int Timestamp){
+	ASSERT(Remark != NULL);
 	// NOTE(fusion): Same as `DecrementIsOnline`.
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"INSERT INTO CharacterDeaths (CharacterID, Level,"
@@ -453,6 +668,135 @@ bool DeleteBuddy(int WorldID, int AccountID, int BuddyID){
 	// NOTE(fusion): Always return true here even if there were no deleted rows
 	// to make them appear as successful deletions.
 	return true;
+}
+
+bool GetBuddies(int WorldID, int AccountID, DynamicArray<TAccountBuddy> *Buddies){
+	ASSERT(Buddies != NULL);
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT B.BuddyID, C.Name"
+		" FROM Buddies AS B"
+		" INNER JOIN Characters AS C"
+			" ON C.WorldID = B.WorldID AND C.CharacterID = B.BuddyID"
+		" WHERE B.WorldID = ?1 AND B.AccountID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)   != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, AccountID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		TAccountBuddy Buddy = {};
+		Buddy.CharacterID = sqlite3_column_int(Stmt, 0);
+		StringCopy(Buddy.Name, sizeof(Buddy.Name),
+				(const char*)sqlite3_column_text(Stmt, 1));
+		Buddies->Push(Buddy);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool GetWorldInvitation(int WorldID, int CharacterID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT 1 FROM WorldInvitations"
+		" WHERE WorldID = ?1 AND CharacterID = ?2");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID)     != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return (ErrorCode == SQLITE_ROW);
+}
+
+bool InsertLoginAttempt(int AccountID, int IPAddress, bool Failed){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO LoginAttempts (AccountID, IPAddress, Timestamp, Failed)"
+			" VALUES (?1, ?2, UNIXEPOCH(), ?4)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID)        != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, IPAddress)        != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 3, (Failed ? 1 : 0)) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+int GetAccountLoginAttempts(int AccountID, int TimeWindow){
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT COUNT(*) FROM LoginAttempts"
+		" WHERE AccountID = ?1 AND Timestamp >= (UNIXEPOCH() - ?2)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return 0;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID)  != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, TimeWindow) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_ROW){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_column_int(Stmt, 0);
+}
+
+int GetIPAddressLoginAttempts(int IPAddress, int TimeWindow){
+	sqlite3_stmt *Stmt = PrepareQuery(
+		"SELECT COUNT(*) FROM LoginAttempts"
+		" WHERE IPAddress = ?1 AND Timestamp >= (UNIXEPOCH() - ?2)");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return 0;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, IPAddress)  != SQLITE_OK
+	|| sqlite3_bind_int(Stmt, 2, TimeWindow) != SQLITE_OK){
+		LOG_ERR("Failed to bind parameters: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	if(sqlite3_step(Stmt) != SQLITE_ROW){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return sqlite3_column_int(Stmt, 0);
 }
 
 // House tables
@@ -848,6 +1192,11 @@ bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int Banishm
 
 // Banishment tables
 //==============================================================================
+bool IsCharacterNamelocked(int CharacterID){
+	TNamelockStatus Status = GetNamelockStatus(CharacterID);
+	return Status.Namelocked && !Status.Approved;
+}
+
 TNamelockStatus GetNamelockStatus(int CharacterID){
 	TNamelockStatus Status = {};
 	sqlite3_stmt *Stmt = PrepareQuery(
@@ -901,6 +1250,30 @@ bool InsertNamelock(int CharacterID, int IPAddress, int GamemasterID,
 	}
 
 	return true;
+}
+
+bool IsAccountBanished(int AccountID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT 1 FROM Banishments"
+			" WHERE AccountID = ?1"
+				" AND (Until = Issued OR Until > UNIXEPOCH())");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID) != SQLITE_OK){
+		LOG_ERR("Failed to bind AccountID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return (ErrorCode == SQLITE_ROW);
 }
 
 TBanishmentStatus GetBanishmentStatus(int CharacterID){
@@ -1023,6 +1396,30 @@ bool InsertNotation(int CharacterID, int IPAddress, int GamemasterID,
 	}
 
 	return true;
+}
+
+bool IsIPBanished(int IPAddress){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT 1 FROM IPBanishments"
+			" WHERE IPAddress = ?1"
+				" AND (Until = Issued OR Until > UNIXEPOCH())");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, IPAddress) != SQLITE_OK){
+		LOG_ERR("Failed to bind IPAddress: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return (ErrorCode == SQLITE_ROW);
 }
 
 bool InsertIPBanishment(int CharacterID, int IPAddress, int GamemasterID,
@@ -1163,6 +1560,43 @@ bool InsertReportedStatement(int WorldID, TStatement *Statement, int BanishmentI
 
 // Info tables
 //==============================================================================
+bool MergeKillStatistics(int WorldID, int NumStats, TKillStatistics *Stats){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"INSERT INTO KillStatistics (WorldID, RaceName, TimesKilled, PlayersKilled)"
+			" VALUES (?1, ?2, ?3, ?4)"
+			" ON CONFLICT DO UPDATE SET TimesKilled = TimesKilled + Excluded.TimesKilled,"
+									" PlayersKilled = PlayersKilled + Excluded.TimesKilled");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, WorldID) != SQLITE_OK){
+		LOG_ERR("failed to bind WorldID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	for(int i = 0; i < NumStats; i += 1){
+		if(sqlite3_bind_text(Stmt, 2, Stats[i].RaceName, -1, NULL) != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 3, Stats[i].TimesKilled)         != SQLITE_OK
+		|| sqlite3_bind_int(Stmt, 4, Stats[i].PlayersKilled)       != SQLITE_OK){
+			LOG_ERR("Failed to bind parameters for \"%s\" stats: %s",
+					Stats[i].RaceName, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		if(sqlite3_step(Stmt) != SQLITE_DONE){
+			LOG_ERR("Failed to insert \"%s\" stats: %s",
+					Stats[i].RaceName, sqlite3_errmsg(g_Database));
+			return false;
+		}
+
+		sqlite3_reset(Stmt);
+	}
+
+	return true;
+}
+
 bool DeleteOnlineCharacters(int WorldID){
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"DELETE FROM OnlineCharacters WHERE WorldID = ?1");

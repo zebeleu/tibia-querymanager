@@ -140,6 +140,28 @@ inline uint32 BufferRead32BE(const uint8 *Buffer){
 		| (uint32)Buffer[3];
 }
 
+inline uint64 BufferRead64LE(const uint8 *Buffer){
+	return (uint64)Buffer[0]
+		| ((uint64)Buffer[1] << 8)
+		| ((uint64)Buffer[2] << 16)
+		| ((uint64)Buffer[3] << 24)
+		| ((uint64)Buffer[4] << 32)
+		| ((uint64)Buffer[5] << 40)
+		| ((uint64)Buffer[6] << 48)
+		| ((uint64)Buffer[7] << 56);
+}
+
+inline uint64 BufferRead64BE(const uint8 *Buffer){
+	return ((uint64)Buffer[0] << 56)
+		| ((uint64)Buffer[1] << 48)
+		| ((uint64)Buffer[2] << 40)
+		| ((uint64)Buffer[3] << 32)
+		| ((uint64)Buffer[4] << 24)
+		| ((uint64)Buffer[5] << 16)
+		| ((uint64)Buffer[6] << 8)
+		| (uint64)Buffer[7];
+}
+
 inline void BufferWrite8(uint8 *Buffer, uint8 Value){
 	Buffer[0] = Value;
 }
@@ -166,6 +188,28 @@ inline void BufferWrite32BE(uint8 *Buffer, uint32 Value){
 	Buffer[1] = (uint8)(Value >> 16);
 	Buffer[2] = (uint8)(Value >>  8);
 	Buffer[3] = (uint8)(Value >>  0);
+}
+
+inline void BufferWrite64LE(uint8 *Buffer, uint64 Value){
+	Buffer[0] = (uint8)(Value >>  0);
+	Buffer[1] = (uint8)(Value >>  8);
+	Buffer[2] = (uint8)(Value >> 16);
+	Buffer[3] = (uint8)(Value >> 24);
+	Buffer[4] = (uint8)(Value >> 32);
+	Buffer[5] = (uint8)(Value >> 40);
+	Buffer[6] = (uint8)(Value >> 48);
+	Buffer[7] = (uint8)(Value >> 56);
+}
+
+inline void BufferWrite64BE(uint8 *Buffer, uint64 Value){
+	Buffer[0] = (uint8)(Value >> 56);
+	Buffer[1] = (uint8)(Value >> 48);
+	Buffer[2] = (uint8)(Value >> 40);
+	Buffer[3] = (uint8)(Value >> 32);
+	Buffer[4] = (uint8)(Value >> 24);
+	Buffer[5] = (uint8)(Value >> 16);
+	Buffer[6] = (uint8)(Value >>  8);
+	Buffer[7] = (uint8)(Value >>  0);
 }
 
 struct TReadBuffer{
@@ -644,7 +688,6 @@ void ProcessAddPaymentNewQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessCancelPaymentNewQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessConnectionQuery(TConnection *Connection);
 
-
 // database.cc
 //==============================================================================
 struct TWorldConfig{
@@ -656,6 +699,36 @@ struct TWorldConfig{
 	int PremiumPlayerBuffer;
 	int MaxNewbies;
 	int PremiumNewbieBuffer;
+};
+
+struct TAccountData{
+	int AccountID;
+	char Email[100];
+	uint8 Auth[64];
+	bool Premium;
+	int PendingPremiumDays;
+	bool Deleted;
+};
+
+struct TAccountBuddy{
+	int CharacterID;
+	char Name[30];
+};
+
+struct TCharacterData{
+	int WorldID;
+	int CharacterID;
+	int AccountID;
+	char Name[30];
+	int Sex;
+	char Guild[30];
+	char Rank[30];
+	char Title[30];
+	bool Deleted;
+};
+
+struct TCharacterRight{
+	char Name[30];
 };
 
 struct TCharacterIndexEntry{
@@ -722,6 +795,12 @@ struct TStatement{
 	char Text[256];
 };
 
+struct TKillStatistics{
+	char RaceName[30];
+	int TimesKilled;
+	int PlayersKilled;
+};
+
 struct TOnlineCharacter{
 	char Name[30];
 	int Level;
@@ -744,17 +823,31 @@ public:
 // NOTE(fusion): Primary tables.
 int GetWorldID(const char *WorldName);
 bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig);
+bool GetAccountData(int AccountID, TAccountData *Account);
+int GetAccountOnlineCharacters(int AccountID);
+bool ActivatePendingPremiumDays(int AccountID);
 int GetCharacterID(int WorldID, const char *CharacterName);
+bool GetCharacterData(const char *CharacterName, TCharacterData *Character);
 bool GetCharacterRight(int CharacterID, const char *Right);
+bool GetCharacterRights(int CharacterID, DynamicArray<TCharacterRight> *Rights);
 bool GetGuildLeaderStatus(int WorldID, int CharacterID);
+bool IncrementIsOnline(int WorldID, int CharacterID);
 bool DecrementIsOnline(int WorldID, int CharacterID);
 bool ClearIsOnline(int WorldID, int *NumAffectedCharacters);
+bool LogoutCharacter(int WorldID, int CharacterID, int Level,
+		const char *Profession, const char *Residence, int LastLoginTime,
+		int TutorActivities);
 bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 		int MaxEntries, int *NumEntries, TCharacterIndexEntry *Entries);
 bool InsertCharacterDeath(int WorldID, int CharacterID, int Level,
 		int OffenderID, const char *Remark, bool Unjustified, int Timestamp);
 bool InsertBuddy(int WorldID, int AccountID, int BuddyID);
 bool DeleteBuddy(int WorldID, int AccountID, int BuddyID);
+bool GetBuddies(int WorldID, int AccountID, DynamicArray<TAccountBuddy> *Buddies);
+bool GetWorldInvitation(int WorldID, int CharacterID);
+bool InsertLoginAttempt(int AccountID, int IPAddress, bool Failed);
+int GetAccountLoginAttempts(int AccountID, int TimeWindow);
+int GetIPAddressLoginAttempts(int IPAddress, int TimeWindow);
 
 // NOTE(fusion): House tables.
 bool FinishHouseAuctions(int WorldID, DynamicArray<THouseAuction> *Auctions);
@@ -772,9 +865,11 @@ bool InsertHouses(int WorldID, int NumHouses, THouse *Houses);
 bool ExcludeFromAuctions(int WorldID, int CharacterID, int Duration, int BanishmentID);
 
 // NOTE(fusion): Banishment tables.
+bool IsCharacterNamelocked(int CharacterID);
 TNamelockStatus GetNamelockStatus(int CharacterID);
 bool InsertNamelock(int CharacterID, int IPAddress, int GamemasterID,
 		const char *Reason, const char *Comment);
+bool IsAccountBanished(int AccountID);
 TBanishmentStatus GetBanishmentStatus(int CharacterID);
 bool InsertBanishment(int CharacterID, int IPAddress, int GamemasterID,
 		const char *Reason, const char *Comment, bool FinalWarning,
@@ -782,15 +877,16 @@ bool InsertBanishment(int CharacterID, int IPAddress, int GamemasterID,
 int GetNotationCount(int CharacterID);
 bool InsertNotation(int CharacterID, int IPAddress, int GamemasterID,
 		const char *Reason, const char *Comment);
+bool IsIPBanished(int IPAddress);
 bool InsertIPBanishment(int CharacterID, int IPAddress, int GamemasterID,
 		const char *Reason, const char *Comment, int Duration);
-
 bool IsStatementReported(int WorldID, TStatement *Statement);
 bool InsertStatements(int WorldID, int NumStatements, TStatement *Statements);
 bool InsertReportedStatement(int WorldID, TStatement *Statement, int BanishmentID,
 		int ReporterID, const char *Reason, const char *Comment);
 
 // NOTE(fusion): Info tables.
+bool MergeKillStatistics(int WorldID, int NumStats, TKillStatistics *Stats);
 bool DeleteOnlineCharacters(int WorldID);
 bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Characters);
 bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord);
@@ -805,5 +901,11 @@ bool UpgradeDatabaseSchema(int UserVersion);
 bool CheckDatabaseSchema(void);
 bool InitDatabase(void);
 void ExitDatabase(void);
+
+// sha256.cc
+//==============================================================================
+void SHA256(const uint8 *Input, int InputBytes, uint8 *Digest);
+bool TestPassword(const uint8 *Auth, int AuthSize, const char *Password);
+bool CheckSHA256(void);
 
 #endif //TIBIA_QUERYMANAGER_HH_

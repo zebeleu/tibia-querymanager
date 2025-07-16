@@ -526,12 +526,208 @@ void ProcessLoginAdminQuery(TConnection *Connection, TReadBuffer *Buffer){
 	SendQueryStatusFailed(Connection);
 }
 
+static int LoginGameTransaction(int WorldID, int AccountID, const char *CharacterName,
+		const char *Password, int IPAddress, bool PrivateWorld, bool GamemasterRequired,
+		TCharacterData *Character, DynamicArray<TAccountBuddy> *Buddies,
+		DynamicArray<TCharacterRight> *Rights, bool *PremiumAccountActivated){
+	TransactionScope Tx("LoginGame");
+	if(!Tx.Begin()){
+		return -1;
+	}
+
+	if(!GetCharacterData(CharacterName, Character)){
+		return -1;
+	}
+
+	if(Character->CharacterID == 0){
+		return 1;
+	}
+
+	if(Character->Deleted){
+		return 2;
+	}
+
+	if(Character->WorldID != WorldID){
+		return 3;
+	}
+
+	if(PrivateWorld){
+		if(!GetWorldInvitation(WorldID, Character->CharacterID)){
+			return 4;
+		}
+	}
+
+	TAccountData Account;
+	if(!GetAccountData(AccountID, &Account)){
+		return -1;
+	}
+
+	if(Account.AccountID == 0 || Account.AccountID != Character->AccountID){
+		// NOTE(fusion): This is correct, there is no error code 5.
+		return 15;
+	}
+
+	if(Account.Deleted){
+		return 8;
+	}
+
+	if(GetAccountLoginAttempts(Account.AccountID, 5 * 60) > 10){
+		return 7;
+	}
+
+	if(GetIPAddressLoginAttempts(IPAddress, 30 * 60) > 15){
+		return 9;
+	}
+
+	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
+		return 6;
+	}
+
+	if(IsAccountBanished(Account.AccountID)){
+		return 10;
+	}
+
+	if(IsCharacterNamelocked(Character->CharacterID)){
+		return 11;
+	}
+
+	if(IsIPBanished(IPAddress)){
+		return 12;
+	}
+
+	if(!GetCharacterRight(Character->CharacterID, "ALLOW_MULTICLIENT")
+			&& GetAccountOnlineCharacters(Account.AccountID) > 0){
+		return 13;
+	}
+
+	if(GamemasterRequired){
+		if(!GetCharacterRight(Character->CharacterID, "GAMEMASTER_OUTFIT")){
+			return 14;
+		}
+	}
+
+	if(!GetBuddies(WorldID, Account.AccountID, Buddies)){
+		return -1;
+	}
+
+	if(!GetCharacterRights(Character->CharacterID, Rights)){
+		return -1;
+	}
+
+	if(!Account.Premium && Account.PendingPremiumDays > 0){
+		if(!ActivatePendingPremiumDays(Account.AccountID)){
+			return -1;
+		}
+
+		*PremiumAccountActivated = true;
+	}
+
+	if(!IncrementIsOnline(WorldID, Character->CharacterID)){
+		return -1;
+	}
+
+	if(!Tx.Commit()){
+		return -1;
+	}
+
+	return 0;
+}
+
 void ProcessLoginGameQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char CharacterName[30];
+	char Password[30];
+	char IPString[16];
+	int AccountID = (int)Buffer->Read32();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	Buffer->ReadString(Password, sizeof(Password));
+	Buffer->ReadString(IPString, sizeof(IPString));
+	bool PrivateWorld = Buffer->ReadFlag();
+	Buffer->ReadFlag(); // "PremiumAccountRequired" unused
+	bool GamemasterRequired = Buffer->ReadFlag();
+
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TCharacterData Character;
+	DynamicArray<TAccountBuddy> Buddies;
+	DynamicArray<TCharacterRight> Rights;
+	bool PremiumAccountActivated = false;
+	int Result = LoginGameTransaction(Connection->WorldID, AccountID,
+			CharacterName, Password, IPAddress, PrivateWorld,
+			GamemasterRequired, &Character, &Buddies, &Rights,
+			&PremiumAccountActivated);
+
+	// IMPORTANT(fusion): We need to insert login attempts outside the login game
+	// transaction or we could end up not having it recorded at all due to rollbacks.
+	// It is also the reason the whole transaction had to be pulled to its own function.
+	// IMPORTANT(fusion): Don't return if we fail to insert the login attempt as the
+	// result of the whole operation was already determined by the transaction function.
+	InsertLoginAttempt(AccountID, IPAddress, (Result != 0));
+
+	if(Result == -1){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(Result != 0){
+		SendQueryStatusError(Connection, Result);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.Write32((uint32)Character.CharacterID);
+	WriteBuffer.WriteString(Character.Name);
+	WriteBuffer.Write8((uint8)Character.Sex);
+	WriteBuffer.WriteString(Character.Guild);
+	WriteBuffer.WriteString(Character.Rank);
+	WriteBuffer.WriteString(Character.Title);
+
+	int NumBuddies = std::min<int>(Buddies.Length(), UINT8_MAX);
+	WriteBuffer.Write8((uint8)NumBuddies);
+	for(int i = 0; i < NumBuddies; i += 1){
+		WriteBuffer.Write32((uint32)Buddies[i].CharacterID);
+		WriteBuffer.WriteString(Buddies[i].Name);
+	}
+
+	int NumRights = std::min<int>(Rights.Length(), UINT8_MAX);
+	WriteBuffer.Write8((uint8)NumRights);
+	for(int i = 0; i < NumRights; i += 1){
+		WriteBuffer.WriteString(Rights[i].Name);
+	}
+
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessLogoutGameQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	char Profession[30];
+	char Residence[30];
+	int CharacterID = (int)Buffer->Read32();
+	int Level = Buffer->Read16();
+	Buffer->ReadString(Profession, sizeof(Profession));
+	Buffer->ReadString(Residence, sizeof(Residence));
+	int LastLoginTime = (int)Buffer->Read32();
+	int TutorActivities = Buffer->Read16();
+
+	if(!LogoutCharacter(Connection->WorldID, CharacterID, Level,
+			Profession, Residence, LastLoginTime, TutorActivities)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
@@ -1261,6 +1457,10 @@ void ProcessCreatePlayerlistQuery(TConnection *Connection, TReadBuffer *Buffer){
 		return;
 	}
 
+	// TODO(fusion): I think `NumCharacters` may be used to signal that the
+	// server is going OFFLINE, in which case we'd have to add an `Online`
+	// column to `Worlds` and update it here.
+
 	bool NewRecord = false;
 	int NumCharacters = Buffer->Read16();
 	if(NumCharacters != 0xFFFF && NumCharacters > 0){
@@ -1293,7 +1493,38 @@ void ProcessCreatePlayerlistQuery(TConnection *Connection, TReadBuffer *Buffer){
 }
 
 void ProcessLogKilledCreaturesQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	if(Connection->ApplicationType != APPLICATION_TYPE_GAME){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int NumStats = Buffer->Read16();
+	TKillStatistics *Stats = (TKillStatistics*)alloca(NumStats * sizeof(TKillStatistics));
+	for(int i = 0; i < NumStats; i += 1){
+		Buffer->ReadString(Stats[i].RaceName, sizeof(Stats[i].RaceName));
+		Stats[i].PlayersKilled = (int)Buffer->Read32();
+		Stats[i].TimesKilled = (int)Buffer->Read32();
+	}
+
+	if(NumStats > 0){
+		TransactionScope Tx("LogKilledCreatures");
+		if(!Tx.Begin()){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+
+		if(!MergeKillStatistics(Connection->WorldID, NumStats, Stats)){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+
+		if(!Tx.Commit()){
+			SendQueryStatusFailed(Connection);
+			return;
+		}
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
 void ProcessLoadPlayersQuery(TConnection *Connection, TReadBuffer *Buffer){

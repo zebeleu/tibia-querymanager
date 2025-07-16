@@ -18,12 +18,13 @@ CREATE TABLE IF NOT EXISTS Worlds (
 
 CREATE TABLE IF NOT EXISTS Accounts (
 	AccountID INTEGER NOT NULL,
+	Email TEXT NOT NULL COLLATE NOCASE,
 	Auth BLOB NOT NULL,
-	EMail TEXT NOT NULL COLLATE NOCASE,
 	PremiumEnd INTEGER NOT NULL,
-	AddPremiumDays INTEGER NOT NULL,
+	PendingPremiumDays INTEGER NOT NULL,
+	Deleted INTEGER NOT NULL,
 	PRIMARY KEY (AccountID),
-	UNIQUE (EMail)
+	UNIQUE (Email)
 );
 
 CREATE TABLE IF NOT EXISTS Characters (
@@ -35,6 +36,11 @@ CREATE TABLE IF NOT EXISTS Characters (
 	Guild TEXT NOT NULL COLLATE NOCASE DEFAULT '',
 	Rank TEXT NOT NULL COLLATE NOCASE DEFAULT '',
 	Title TEXT NOT NULL COLLATE NOCASE DEFAULT '',
+	Level INTEGER NOT NULL DEFAULT 0,
+	Profession TEXT NOT NULL DEFAULT '',
+	Residence TEXT NOT NULL DEFAULT '',
+	LastLoginTime INTEGER NOT NULL DEFAULT 0,
+	TutorActivities INTEGER NOT NULL DEFAULT 0,
 	IsOnline INTEGER NOT NULL DEFAULT 0,
 	Deleted INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (CharacterID),
@@ -78,6 +84,17 @@ CREATE TABLE IF NOT EXISTS WorldInvitations (
 	CharacterID INTEGER NOT NULL,
 	PRIMARY KEY (WorldID, CharacterID)
 );
+
+CREATE TABLE IF NOT EXISTS LoginAttempts (
+	AccountID INTEGER NOT NULL,
+	IPAddress INTEGER NOT NULL,
+	Timestamp INTEGER NOT NULL,
+	Failed INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS LoginAttemptsAccountIndex
+		ON LoginAttempts(AccountID, Timestamp);
+CREATE INDEX IF NOT EXISTS LoginAttemptsAddressIndex
+		ON LoginAttempts(IPAddress, Timestamp);
 
 -- House Tables
 --==============================================================================
@@ -231,10 +248,10 @@ CREATE INDEX IF NOT EXISTS ReportedStatementsBanishmentIndex
 --==============================================================================
 CREATE TABLE IF NOT EXISTS KillStatistics (
 	WorldID INTEGER NOT NULL,
-	Name TEXT NOT NULL COLLATE NOCASE,
+	RaceName TEXT NOT NULL COLLATE NOCASE,
 	TimesKilled INTEGER NOT NULL,
 	PlayersKilled INTEGER NOT NULL,
-	PRIMARY KEY (WorldID, Name)
+	PRIMARY KEY (WorldID, RaceName)
 );
 
 CREATE TABLE IF NOT EXISTS OnlineCharacters (

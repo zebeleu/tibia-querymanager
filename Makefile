@@ -15,7 +15,7 @@ else
 	CFLAGS += -O2
 endif
 
-$(BUILDDIR)/$(OUTPUTEXE): $(BUILDDIR)/connections.obj $(BUILDDIR)/database.obj $(BUILDDIR)/querymanager.obj $(BUILDDIR)/sqlite3.obj
+$(BUILDDIR)/$(OUTPUTEXE): $(BUILDDIR)/connections.obj $(BUILDDIR)/database.obj $(BUILDDIR)/querymanager.obj $(BUILDDIR)/sha256.obj $(BUILDDIR)/sqlite3.obj
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LFLAGS)
 
@@ -28,6 +28,10 @@ $(BUILDDIR)/database.obj: $(SRCDIR)/database.cc $(SRCDIR)/querymanager.hh
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 
 $(BUILDDIR)/querymanager.obj: $(SRCDIR)/querymanager.cc $(SRCDIR)/querymanager.hh
+	@mkdir -p $(@D)
+	$(CXX) -c $(CXXFLAGS) -o $@ $<
+
+$(BUILDDIR)/sha256.obj: $(SRCDIR)/sha256.cc $(SRCDIR)/querymanager.hh
 	@mkdir -p $(@D)
 	$(CXX) -c $(CXXFLAGS) -o $@ $<
 

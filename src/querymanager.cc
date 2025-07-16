@@ -364,6 +364,10 @@ int main(int argc, const char **argv){
 		return EXIT_FAILURE;
 	}
 
+	if(!CheckSHA256()){
+		return EXIT_FAILURE;
+	}
+
 	atexit(ExitDatabase);
 	atexit(ExitConnections);
 	if(!InitDatabase() || !InitConnections()){
