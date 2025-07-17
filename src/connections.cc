@@ -175,7 +175,6 @@ void ReleaseConnection(TConnection *Connection){
 		DeleteConnectionBuffer(Connection);
 		memset(Connection, 0, sizeof(TConnection));
 		Connection->State = CONNECTION_FREE;
-		Connection->Socket = -1;
 	}
 }
 
@@ -397,6 +396,7 @@ void ExitConnections(void){
 		}
 
 		free(g_Connections);
+		g_Connections = NULL;
 	}
 }
 
@@ -518,11 +518,151 @@ void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer){
 	SendQueryStatusOk(Connection);
 }
 
+// TODO(fusion): This might be replaced with some `LOGIN_WEB` query.
 void ProcessCheckAccountPasswordQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	char Password[30];
+	char IPString[16];
+	int AccountID = (int)Buffer->Read32();
+	Buffer->ReadString(Password, sizeof(Password));
+	Buffer->ReadString(IPString, sizeof(IPString));
+
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// TODO(fusion): This query may return errors 1-4 but their meaning is not
+	// clear, since there is no explicit use of it.
+	TAccountData Account;
+	if(!GetAccountData(AccountID, &Account)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(Account.AccountID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+
+	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	if(IsAccountBanished(Account.AccountID)){
+		SendQueryStatusError(Connection, 3);
+		return;
+	}
+
+	if(IsIPBanished(IPAddress)){
+		SendQueryStatusError(Connection, 4);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
+}
+
+int LoginAccountTransaction(int AccountID, const char *Password, int IPAddress,
+		DynamicArray<TCharacterLoginData> *Characters, int *PremiumDays){
+	TransactionScope Tx("LoginAccount");
+	if(!Tx.Begin()){
+		return -1;
+	}
+
+	TAccountData Account;
+	if(!GetAccountData(AccountID, &Account)){
+		return -1;
+	}
+
+	if(Account.AccountID == 0){
+		return 1;
+	}
+
+	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
+		return 2;
+	}
+
+	if(GetAccountLoginAttempts(Account.AccountID, 5 * 60) > 10){
+		return 3;
+	}
+
+	if(GetIPAddressLoginAttempts(IPAddress, 30 * 60) > 15){
+		return 4;
+	}
+
+	if(IsAccountBanished(Account.AccountID)){
+		return 5;
+	}
+
+	if(IsIPBanished(IPAddress)){
+		return 6;
+	}
+
+	if(!GetCharacterList(Account.AccountID, Characters)){
+		return -1;
+	}
+
+	if(!Tx.Commit()){
+		return -1;
+	}
+
+	*PremiumDays = Account.PremiumDays + Account.PendingPremiumDays;
+	return 0;
+}
+
+void ProcessLoginAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
+	char Password[30];
+	char IPString[16];
+	int AccountID = (int)Buffer->Read32();
+	Buffer->ReadString(Password, sizeof(Password));
+	Buffer->ReadString(IPString, sizeof(IPString));
+
+	int IPAddress = 0;
+	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int PremiumDays = 0;
+	DynamicArray<TCharacterLoginData> Characters;
+	int Result = LoginAccountTransaction(AccountID, Password,
+			IPAddress, &Characters, &PremiumDays);
+
+	// NOTE(fusion): Similar to `ProcessLoginGameQuery` except we don't modify
+	// any tables inside the login transaction.
+	// TODO(fusion): Maybe have different login attempt tables or types?
+	InsertLoginAttempt(AccountID, IPAddress, (Result != 0));
+
+	if(Result == -1){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(Result != 0){
+		SendQueryStatusError(Connection, Result);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumCharacters = std::min<int>(Characters.Length(), UINT8_MAX);
+	WriteBuffer.Write8((uint8)NumCharacters);
+	for(int i = 0; i < NumCharacters; i += 1){
+		WriteBuffer.WriteString(Characters[i].Name);
+		WriteBuffer.WriteString(Characters[i].WorldName);
+		WriteBuffer.Write32BE((uint32)Characters[i].WorldAddress);
+		WriteBuffer.Write16((uint16)Characters[i].WorldPort);
+	}
+	WriteBuffer.Write16((uint16)PremiumDays);
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessLoginAdminQuery(TConnection *Connection, TReadBuffer *Buffer){
+	// TODO(fusion): I thought for a second this could be the query used with
+	// the login server but it doesn't take a password or ip address for basic
+	// checks. Even if it's used in combination with `CheckAccountPassword`,
+	// it doesn't make sense to split what should have been a single query which
+	// is what the new `LoginAccount` query does.
 	SendQueryStatusFailed(Connection);
 }
 
@@ -571,16 +711,16 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 		return 8;
 	}
 
+	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
+		return 6;
+	}
+
 	if(GetAccountLoginAttempts(Account.AccountID, 5 * 60) > 10){
 		return 7;
 	}
 
 	if(GetIPAddressLoginAttempts(IPAddress, 30 * 60) > 15){
 		return 9;
-	}
-
-	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
-		return 6;
 	}
 
 	if(IsAccountBanished(Account.AccountID)){
@@ -614,7 +754,7 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 		return -1;
 	}
 
-	if(!Account.Premium && Account.PendingPremiumDays > 0){
+	if(Account.PremiumDays == 0 && Account.PendingPremiumDays > 0){
 		if(!ActivatePendingPremiumDays(Account.AccountID)){
 			return -1;
 		}
@@ -1717,6 +1857,7 @@ void ProcessConnectionQuery(TConnection *Connection){
 
 	switch(Query){
 		case QUERY_CHECK_ACCOUNT_PASSWORD:		ProcessCheckAccountPasswordQuery(Connection, &Buffer); break;
+		case QUERY_LOGIN_ACCOUNT:				ProcessLoginAccountQuery(Connection, &Buffer); break;
 		case QUERY_LOGIN_ADMIN:					ProcessLoginAdminQuery(Connection, &Buffer); break;
 		case QUERY_LOGIN_GAME:					ProcessLoginGameQuery(Connection, &Buffer); break;
 		case QUERY_LOGOUT_GAME:					ProcessLogoutGameQuery(Connection, &Buffer); break;

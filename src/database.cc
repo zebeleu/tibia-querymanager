@@ -201,7 +201,7 @@ bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig){
 bool GetAccountData(int AccountID, TAccountData *Account){
 	ASSERT(Account != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
-		"SELECT AccountID, Email, Auth, (PremiumEnd >= UNIXEPOCH()), PendingPremiumDays"
+		"SELECT AccountID, Email, Auth, MAX(PremiumEnd - UNIXEPOCH(), 0), PendingPremiumDays"
 		" FROM Accounts WHERE AccountID = ?1");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
@@ -227,7 +227,7 @@ bool GetAccountData(int AccountID, TAccountData *Account){
 		if(sqlite3_column_bytes(Stmt, 2) == sizeof(Account->Auth)){
 			memcpy(Account->Auth, sqlite3_column_blob(Stmt, 2), sizeof(Account->Auth));
 		}
-		Account->Premium = (sqlite3_column_int(Stmt, 3) != 0);
+		Account->PremiumDays = (sqlite3_column_int(Stmt, 3) + 86399) / 86400;
 		Account->PendingPremiumDays = sqlite3_column_int(Stmt, 4);
 	}
 
@@ -273,6 +273,41 @@ bool ActivatePendingPremiumDays(int AccountID){
 	}
 
 	if(sqlite3_step(Stmt) != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	return true;
+}
+
+bool GetCharacterList(int AccountID, DynamicArray<TCharacterLoginData> *Characters){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT C.Name, W.Name, W.IPAddress, W.Port"
+			" FROM Characters AS C"
+			" INNER JOIN Worlds AS W ON W.WorldID = C.WorldID"
+			" WHERE C.AccountID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, AccountID) != SQLITE_OK){
+		LOG_ERR("Failed to bind AccountID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		TCharacterLoginData Character = {};
+		StringCopy(Character.Name, sizeof(Character.Name),
+				(const char*)sqlite3_column_text(Stmt, 0));
+		StringCopy(Character.WorldName, sizeof(Character.WorldName),
+				(const char*)sqlite3_column_text(Stmt, 1));
+		Character.WorldAddress = sqlite3_column_int(Stmt, 2);
+		Character.WorldPort = sqlite3_column_int(Stmt, 3);
+		Characters->Push(Character);
+	}
+
+	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
 		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
 		return false;
 	}

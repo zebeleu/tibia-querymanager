@@ -549,6 +549,7 @@ enum : int {
 enum : int {
 	QUERY_LOGIN						= 0,
 	QUERY_CHECK_ACCOUNT_PASSWORD	= 10,
+	QUERY_LOGIN_ACCOUNT				= 11,
 	QUERY_LOGIN_ADMIN				= 12,
 	QUERY_LOGIN_GAME				= 20,
 	QUERY_LOGOUT_GAME				= 21,
@@ -639,6 +640,7 @@ void SendQueryStatusError(TConnection *Connection, int ErrorCode);
 void SendQueryStatusFailed(TConnection *Connection);
 void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessCheckAccountPasswordQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessLoginAccountQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessLoginAdminQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessLoginGameQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessLogoutGameQuery(TConnection *Connection, TReadBuffer *Buffer);
@@ -705,7 +707,7 @@ struct TAccountData{
 	int AccountID;
 	char Email[100];
 	uint8 Auth[64];
-	bool Premium;
+	int PremiumDays;
 	int PendingPremiumDays;
 	bool Deleted;
 };
@@ -713,6 +715,13 @@ struct TAccountData{
 struct TAccountBuddy{
 	int CharacterID;
 	char Name[30];
+};
+
+struct TCharacterLoginData{
+	char Name[30];
+	char WorldName[30];
+	int WorldAddress;
+	int WorldPort;
 };
 
 struct TCharacterData{
@@ -826,6 +835,7 @@ bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig);
 bool GetAccountData(int AccountID, TAccountData *Account);
 int GetAccountOnlineCharacters(int AccountID);
 bool ActivatePendingPremiumDays(int AccountID);
+bool GetCharacterList(int AccountID, DynamicArray<TCharacterLoginData> *Characters);
 int GetCharacterID(int WorldID, const char *CharacterName);
 bool GetCharacterData(const char *CharacterName, TCharacterData *Character);
 bool GetCharacterRight(int CharacterID, const char *Right);

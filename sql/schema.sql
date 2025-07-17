@@ -20,9 +20,9 @@ CREATE TABLE IF NOT EXISTS Accounts (
 	AccountID INTEGER NOT NULL,
 	Email TEXT NOT NULL COLLATE NOCASE,
 	Auth BLOB NOT NULL,
-	PremiumEnd INTEGER NOT NULL,
-	PendingPremiumDays INTEGER NOT NULL,
-	Deleted INTEGER NOT NULL,
+	PremiumEnd INTEGER NOT NULL DEFAULT 0,
+	PendingPremiumDays INTEGER NOT NULL DEFAULT 0,
+	Deleted INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (AccountID),
 	UNIQUE (Email)
 );
@@ -264,6 +264,12 @@ CREATE TABLE IF NOT EXISTS OnlineCharacters (
 
 -- REMOVE(fusion): Testing Data.
 --==============================================================================
-INSERT INTO Worlds (Name, Type, RebootTime, Address, Port, MaxPlayers,
+INSERT INTO Worlds (WorldID, Name, Type, RebootTime, Address, Port, MaxPlayers,
 					PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer)
-	VALUES ('Zanera', 0, 5, 0x7F000001, 7172, 1000, 100, 300, 100);
+	VALUES (1, 'Zanera', 0, 5, 0x7F000001, 7172, 1000, 100, 300, 100);
+
+INSERT INTO Accounts (AccountID, Email, Auth)
+	VALUES (111111, '@tibia', X'206699cbc2fae1683118c873d746aa376049cb5923ef0980298bb7acbba527ec9e765668f7a338dffea34acf61a20efb654c1e9c62d35148dba2aeeef8dc7788');
+
+INSERT INTO Characters (WorldID, CharacterID, AccountID, Name, Sex)
+	VALUES (1, 1, 1, 'Player', 1);
