@@ -1,19 +1,28 @@
 #include "querymanager.hh"
 
+// TODO(fusion): Support windows eventually?
+#if OS_LINUX
+#	include <errno.h>
+#	include <signal.h>
+#else
+#	error "Operating system not currently supported."
+#endif
+
+// Shutdown Signal
+int  g_ShutdownSignal			= 0;
+
 // Time
 int  g_MonotonicTimeMS			= 0;
 
-// Database CONFIG
+// Config
 char g_DatabaseFile[1024]		= "tibia.db";
 int  g_MaxCachedStatements		= 100;
-
-// Connection CONFIG
-char g_Password[30]				= "";
-int  g_Port						= 7174;
+int  g_UpdateRate				= 20;
+int  g_QueryManagerPort			= 7174;
+char g_QueryManagerPassword[30]	= "";
 int  g_MaxConnections			= 50;
 int  g_MaxConnectionIdleTime	= 60000;
 int  g_MaxConnectionPacketSize	= (int)MB(1);
-int  g_UpdateRate				= 20;
 
 void LogAdd(const char *Prefix, const char *Format, ...){
 	char Entry[4096];
@@ -331,18 +340,18 @@ bool ReadConfig(const char *FileName){
 			ReadStringConfig(g_DatabaseFile, (int)sizeof(g_DatabaseFile), Val);
 		}else if(StringEqCI(Key, "MaxCachedStatements")){
 			ReadIntegerConfig(&g_MaxCachedStatements, Val);
-		}else if(StringEqCI(Key, "Password")){
-			ReadStringConfig(g_Password, (int)sizeof(g_Password), Val);
-		}else if(StringEqCI(Key, "Port")){
-			ReadIntegerConfig(&g_Port, Val);
+		}else if(StringEqCI(Key, "UpdateRate")){
+			ReadIntegerConfig(&g_UpdateRate, Val);
+		}else if(StringEqCI(Key, "QueryManagerPort")){
+			ReadIntegerConfig(&g_QueryManagerPort, Val);
+		}else if(StringEqCI(Key, "QueryManagerPassword")){
+			ReadStringConfig(g_QueryManagerPassword, (int)sizeof(g_QueryManagerPassword), Val);
 		}else if(StringEqCI(Key, "MaxConnections")){
 			ReadIntegerConfig(&g_MaxConnections, Val);
 		}else if(StringEqCI(Key, "MaxConnectionIdleTime")){
 			ReadDurationConfig(&g_MaxConnectionIdleTime, Val);
 		}else if(StringEqCI(Key, "MaxConnectionPacketSize")){
 			ReadSizeConfig(&g_MaxConnectionPacketSize, Val);
-		}else if(StringEqCI(Key, "UpdateRate")){
-			ReadIntegerConfig(&g_UpdateRate, Val);
 		}else{
 			LOG_WARN("Unknown config \"%s\"", Key);
 		}
@@ -352,9 +361,32 @@ bool ReadConfig(const char *FileName){
 	return true;
 }
 
+static bool SigHandler(int SigNr, sighandler_t Handler){
+	struct sigaction Action = {};
+	Action.sa_handler = Handler;
+	sigfillset(&Action.sa_mask);
+	if(sigaction(SigNr, &Action, NULL) == -1){
+		LOG_ERR("Failed to change handler for signal %d (%s): (%d) %s",
+				SigNr, sigdescr_np(SigNr), errno, strerrordesc_np(errno));
+		return false;
+	}
+	return true;
+}
+
+static void ShutdownHandler(int SigNr){
+	g_ShutdownSignal = SigNr;
+}
+
 int main(int argc, const char **argv){
 	(void)argc;
 	(void)argv;
+
+	g_ShutdownSignal = 0;
+	if(!SigHandler(SIGPIPE, SIG_IGN)
+	|| !SigHandler(SIGINT, ShutdownHandler)
+	|| !SigHandler(SIGTERM, ShutdownHandler)){
+		return EXIT_FAILURE;
+	}
 
 	int64 StartTime = GetClockMonotonicMS();
 	g_MonotonicTimeMS = 0;
@@ -376,7 +408,7 @@ int main(int argc, const char **argv){
 
 	LOG("Running at %d updates per second...", g_UpdateRate);
 	int64 UpdateInterval = 1000 / (int64)g_UpdateRate;
-	while(true){
+	while(g_ShutdownSignal == 0){
 		int64 UpdateStart = GetClockMonotonicMS();
 		g_MonotonicTimeMS = (int)(UpdateStart - StartTime);
 		ProcessConnections();
@@ -386,6 +418,9 @@ int main(int argc, const char **argv){
 			SleepMS(NextUpdate - UpdateEnd);
 		}
 	}
+
+	LOG("Received signal %d (%s), shutting down...",
+			g_ShutdownSignal, sigdescr_np(g_ShutdownSignal));
 
 	return EXIT_SUCCESS;
 }

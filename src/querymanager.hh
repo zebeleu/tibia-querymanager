@@ -78,17 +78,15 @@ typedef size_t usize;
 // Time
 extern int  g_MonotonicTimeMS;
 
-// Database CONFIG
+// Config
 extern char g_DatabaseFile[1024];
 extern int  g_MaxCachedStatements;
-
-// Connection CONFIG
-extern char g_Password[30];
-extern int  g_Port;
+extern int  g_UpdateRate;
+extern int  g_QueryManagerPort;
+extern char g_QueryManagerPassword[30];
 extern int  g_MaxConnections;
 extern int  g_MaxConnectionIdleTime;
 extern int  g_MaxConnectionPacketSize;
-extern int  g_UpdateRate;
 
 void LogAdd(const char *Prefix, const char *Format, ...) ATTR_PRINTF(2, 3);
 void LogAddVerbose(const char *Prefix, const char *Function,
@@ -530,14 +528,8 @@ public:
 //==============================================================================
 enum : int {
 	APPLICATION_TYPE_GAME	= 1,
-
-	// TODO(fusion): There is definitely more application types that we don't
-	// know about. From looking at the config loader on the server application,
-	// we could perhaps infer a few, although we're gonna be limited to our own
-	// usage cases (GAME and WEB).
-	//APPLICATION_TYPE_WEB
-	//APPLICATION_TYPE_FORUM
-	//APPLICATION_TYPE_ADMIN
+	APPLICATION_TYPE_LOGIN	= 2,
+	APPLICATION_TYPE_WEB	= 3,
 };
 
 enum : int {
@@ -695,7 +687,7 @@ void ProcessConnectionQuery(TConnection *Connection);
 struct TWorldConfig{
 	int Type;
 	int RebootTime;
-	int Address;
+	int IPAddress;
 	int Port;
 	int MaxPlayers;
 	int PremiumPlayerBuffer;
@@ -834,6 +826,7 @@ int GetWorldID(const char *WorldName);
 bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig);
 bool GetAccountData(int AccountID, TAccountData *Account);
 int GetAccountOnlineCharacters(int AccountID);
+bool IsCharacterOnline(int CharacterID);
 bool ActivatePendingPremiumDays(int AccountID);
 bool GetCharacterList(int AccountID, DynamicArray<TCharacterLoginData> *Characters);
 int GetCharacterID(int WorldID, const char *CharacterName);

@@ -53,7 +53,7 @@ sqlite3_stmt *PrepareQuery(const char *Text){
 	if(Stmt == NULL){
 		if(sqlite3_prepare_v3(g_Database, Text, -1,
 				SQLITE_PREPARE_PERSISTENT, &Stmt, NULL) != SQLITE_OK){
-			LOG_ERR("Failed to prepary query: %s", sqlite3_errmsg(g_Database));
+			LOG_ERR("Failed to prepare query: %s", sqlite3_errmsg(g_Database));
 			return NULL;
 		}
 
@@ -169,7 +169,7 @@ int GetWorldID(const char *WorldName){
 bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig){
 	ASSERT(WorldConfig != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
-			"SELECT Type, RebootTime, Address, Port, MaxPlayers,"
+			"SELECT Type, RebootTime, IPAddress, Port, MaxPlayers,"
 				" PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer"
 			" FROM Worlds WHERE WorldID = ?1");
 	if(Stmt == NULL){
@@ -189,7 +189,7 @@ bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig){
 
 	WorldConfig->Type					= sqlite3_column_int(Stmt, 0);
 	WorldConfig->RebootTime				= sqlite3_column_int(Stmt, 1);
-	WorldConfig->Address				= sqlite3_column_int(Stmt, 2);
+	WorldConfig->IPAddress				= sqlite3_column_int(Stmt, 2);
 	WorldConfig->Port					= sqlite3_column_int(Stmt, 3);
 	WorldConfig->MaxPlayers				= sqlite3_column_int(Stmt, 4);
 	WorldConfig->PremiumPlayerBuffer	= sqlite3_column_int(Stmt, 5);
@@ -254,6 +254,33 @@ int GetAccountOnlineCharacters(int AccountID){
 	}
 
 	return sqlite3_column_int(Stmt, 0);
+}
+
+bool IsCharacterOnline(int CharacterID){
+	sqlite3_stmt *Stmt = PrepareQuery(
+			"SELECT IsOnline FROM Characters WHERE CharacterID = ?1");
+	if(Stmt == NULL){
+		LOG_ERR("Failed to prepare query");
+		return false;
+	}
+
+	if(sqlite3_bind_int(Stmt, 1, CharacterID) != SQLITE_OK){
+		LOG_ERR("Failed to bind CharacterID: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	int ErrorCode = sqlite3_step(Stmt);
+	if(ErrorCode != SQLITE_ROW && ErrorCode != SQLITE_DONE){
+		LOG_ERR("Failed to execute query: %s", sqlite3_errmsg(g_Database));
+		return false;
+	}
+
+	bool Result = false;
+	if(ErrorCode == SQLITE_ROW){
+		Result = (sqlite3_column_int(Stmt, 0) != 0);
+	}
+
+	return Result;
 }
 
 bool ActivatePendingPremiumDays(int AccountID){
@@ -470,7 +497,7 @@ bool GetGuildLeaderStatus(int WorldID, int CharacterID){
 }
 
 bool IncrementIsOnline(int WorldID, int CharacterID){
-	// NOTE(fusion): Same as `DecrementIsOnline`
+	// NOTE(fusion): Same as `DecrementIsOnline`.
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"UPDATE Characters SET IsOnline = IsOnline + 1"
 			" WHERE WorldID = ?1 AND CharacterID = ?2");
@@ -553,7 +580,7 @@ bool LogoutCharacter(int WorldID, int CharacterID, int Level,
 				" Profession = ?4,"
 				" Residence = ?5,"
 				" LastLoginTime = ?6,"
-				" TutorActivities = ?7"
+				" TutorActivities = ?7,"
 				" IsOnline = IsOnline - 1"
 			" WHERE WorldID = ?1 AND CharacterID = ?2");
 	if(Stmt == NULL){
@@ -767,7 +794,7 @@ bool GetWorldInvitation(int WorldID, int CharacterID){
 bool InsertLoginAttempt(int AccountID, int IPAddress, bool Failed){
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"INSERT INTO LoginAttempts (AccountID, IPAddress, Timestamp, Failed)"
-			" VALUES (?1, ?2, UNIXEPOCH(), ?4)");
+			" VALUES (?1, ?2, UNIXEPOCH(), ?3)");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
 		return false;
@@ -916,9 +943,10 @@ bool GetFreeAccountEvictions(int WorldID, DynamicArray<THouseEviction> *Eviction
 	sqlite3_stmt *Stmt = PrepareQuery(
 			"SELECT O.HouseID, O.OwnerID"
 			" FROM HouseOwners AS O"
-			" LEFT JOIN CharacterRights AS R"
-				" ON R.CharacterID = O.OwnerID AND R.Right = 'PREMIUM_ACCOUNT'"
-			" WHERE O.WorldID = ?1 AND R.CharacterID IS NULL");
+			" LEFT JOIN Characters AS C ON C.CharacterID = O.OwnerID"
+			" LEFT JOIN Accounts AS A ON A.AccountID = C.AccountID"
+			" WHERE O.WorldID = ?1"
+				" AND (A.PremiumEnd IS NULL OR A.PremiumEnd < UNIXEPOCH())");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
 		return false;

@@ -84,11 +84,11 @@ int ListenerAccept(int Listener, uint32 *OutAddr, uint16 *OutPort){
 		// IMPORTANT(fusion): It should be impossible to spoof the loopback
 		// address so this comparison should be safe. We're also binding the
 		// listening socket to the loopback address which should prevent any
-		// other address to show up here.
+		// remote addresses from showing up here.
 		uint32 Addr = ntohl(SocketAddr.sin_addr.s_addr);
 		uint16 Port = ntohs(SocketAddr.sin_port);
 		if(Addr != INADDR_LOOPBACK){
-			LOG_ERR("Rejecting remote connection from %08X.", Addr);
+			LOG_ERR("Rejecting remote connection from %08X:%d.", Addr, Port);
 			close(Socket);
 			continue;
 		}
@@ -317,8 +317,8 @@ void ProcessConnections(void){
 		}
 
 		if(AssignConnection(Socket, Addr, Port) == NULL){
-			LOG_ERR("Rejecting connection from %08X due to max number of"
-					" connections being reached (%d)", Addr, g_MaxConnections);
+			LOG_ERR("Rejecting connection %08X:%d due to max number of"
+					" connections being reached (%d)", Addr, Port, g_MaxConnections);
 			close(Socket);
 		}
 	}
@@ -364,12 +364,12 @@ bool InitConnections(void){
 	ASSERT(g_Listener == -1);
 	ASSERT(g_Connections == NULL);
 
-	LOG("Listening port: %d", g_Port);
+	LOG("Query manager port: %d", g_QueryManagerPort);
 	LOG("Max connections: %d", g_MaxConnections);
-	LOG("Max connection idle time: %d ms", g_MaxConnectionIdleTime);
+	LOG("Max connection idle time: %dms", g_MaxConnectionIdleTime);
 	LOG("Max connection packet size: %d", g_MaxConnectionPacketSize);
 
-	g_Listener = ListenerBind((uint16)g_Port);
+	g_Listener = ListenerBind((uint16)g_QueryManagerPort);
 	if(g_Listener == -1){
 		LOG_ERR("Failed to bind listener");
 		return false;
@@ -491,7 +491,7 @@ void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer){
 
 	// TODO(fusion): Probably just disconnect on failed login attempt? Implement
 	// write then disconnect?
-	if(!StringEq(g_Password, Password)){
+	if(!StringEq(g_QueryManagerPassword, Password)){
 		LOG_WARN("Invalid login attempt from %s", Connection->RemoteAddress);
 		SendQueryStatusFailed(Connection);
 		return;
@@ -501,15 +501,22 @@ void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer){
 	if(ApplicationType == APPLICATION_TYPE_GAME){
 		WorldID = GetWorldID(LoginData);
 		if(WorldID == 0){
-			LOG_WARN("Unknown world name \"%s\"", LoginData);
+			LOG_WARN("Rejecting connection %s from unknown game server \"%s\"",
+					Connection->RemoteAddress, LoginData);
 			SendQueryStatusFailed(Connection);
 			return;
 		}
-
-		LOG("Connection %s AUTHORIZED to world \"%s\" (%d)",
+		LOG("Connection %s AUTHORIZED to game server \"%s\" (%d)",
 				Connection->RemoteAddress, LoginData, WorldID);
+	}else if(ApplicationType == APPLICATION_TYPE_LOGIN){
+		LOG("Connection %s AUTHORIZED to login server", Connection->RemoteAddress);
+	}else if(ApplicationType == APPLICATION_TYPE_WEB){
+		LOG("Connection %s AUTHORIZED to web server", Connection->RemoteAddress);
 	}else{
-		LOG("Connection %s AUTHORIZED", Connection->RemoteAddress);
+		LOG_WARN("Rejecting connection %s from unknown application type %d",
+				Connection->RemoteAddress, ApplicationType);
+		SendQueryStatusFailed(Connection);
+		return;
 	}
 
 	Connection->Authorized = true;
@@ -735,8 +742,10 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 		return 12;
 	}
 
+	// TODO(fusion): Probably merge these into a single query?
 	if(!GetCharacterRight(Character->CharacterID, "ALLOW_MULTICLIENT")
-			&& GetAccountOnlineCharacters(Account.AccountID) > 0){
+			&& GetAccountOnlineCharacters(Account.AccountID) > 0
+			&& !IsCharacterOnline(Character->CharacterID)){
 		return 13;
 	}
 
@@ -759,7 +768,13 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 			return -1;
 		}
 
+		Account.PremiumDays += Account.PendingPremiumDays;
+		Account.PendingPremiumDays = 0;
 		*PremiumAccountActivated = true;
+	}
+
+	if(Account.PremiumDays > 0){
+		Rights->Push(TCharacterRight{"PREMIUM_ACCOUNT"});
 	}
 
 	if(!IncrementIsOnline(WorldID, Character->CharacterID)){
@@ -842,6 +857,8 @@ void ProcessLoginGameQuery(TConnection *Connection, TReadBuffer *Buffer){
 	for(int i = 0; i < NumRights; i += 1){
 		WriteBuffer.WriteString(Rights[i].Name);
 	}
+
+	WriteBuffer.WriteFlag(PremiumAccountActivated);
 
 	SendResponse(Connection, &WriteBuffer);
 }
@@ -1763,7 +1780,7 @@ void ProcessLoadWorldConfigQuery(TConnection *Connection, TReadBuffer *Buffer){
 	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
 	WriteBuffer.Write8((uint8)WorldConfig.Type);
 	WriteBuffer.Write8((uint8)WorldConfig.RebootTime);
-	WriteBuffer.Write32BE((uint32)WorldConfig.Address);
+	WriteBuffer.Write32BE((uint32)WorldConfig.IPAddress);
 	WriteBuffer.Write16((uint16)WorldConfig.Port);
 	WriteBuffer.Write16((uint16)WorldConfig.MaxPlayers);
 	WriteBuffer.Write16((uint16)WorldConfig.PremiumPlayerBuffer);
