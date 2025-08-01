@@ -95,7 +95,10 @@ void LogAddVerbose(const char *Prefix, const char *Function,
 struct tm GetLocalTime(time_t t);
 int64 GetClockMonotonicMS(void);
 void SleepMS(int64 DurationMS);
+void CryptoRandom(uint8 *Buffer, int Count);
+int RoundSecondsToDays(int Seconds);
 
+bool StringEmpty(const char *String);
 bool StringEq(const char *A, const char *B);
 bool StringEqCI(const char *A, const char *B);
 bool StringCopyN(char *Dest, int DestCapacity, const char *Src, int SrcLength);
@@ -370,7 +373,7 @@ struct TWriteBuffer{
 	}
 
 	void Rewrite16(int Position, uint16 Value){
-		if((Position + 2) <= this->Position){
+		if((Position + 2) <= this->Position && !this->Overflowed()){
 			BufferWrite16LE(this->Buffer + Position, Value);
 		}
 	}
@@ -573,22 +576,13 @@ enum : int {
 	QUERY_EXCLUDE_FROM_AUCTIONS		= 51,
 	QUERY_CANCEL_HOUSE_TRANSFER		= 52,
 	QUERY_LOAD_WORLD_CONFIG			= 53,
-	QUERY_GET_KEPT_CHARACTERS		= 200,
-	QUERY_GET_DELETED_CHARACTERS	= 201,
-	QUERY_DELETE_OLD_CHARACTER		= 202,
-	QUERY_GET_HIDDEN_CHARACTERS		= 203,
-	QUERY_CREATE_HIGHSCORES			= 204,
-	QUERY_CREATE_CENSUS				= 205,
-	QUERY_CREATE_KILL_STATISTICS	= 206,
-	QUERY_GET_PLAYERS_ONLINE		= 207,
-	QUERY_GET_WORLDS				= 208,
-	QUERY_GET_SERVER_LOAD			= 209,
-	QUERY_INSERT_PAYMENT_DATA_OLD	= 210,
-	QUERY_ADD_PAYMENT_OLD			= 211,
-	QUERY_CANCEL_PAYMENT_OLD		= 212,
-	QUERY_INSERT_PAYMENT_DATA_NEW	= 213,
-	QUERY_ADD_PAYMENT_NEW			= 214,
-	QUERY_CANCEL_PAYMENT_NEW		= 215,
+	QUERY_CREATE_ACCOUNT			= 100,
+	QUERY_CREATE_CHARACTER			= 101,
+	QUERY_GET_ACCOUNT_SUMMARY		= 102,
+	QUERY_GET_CHARACTER_PROFILE		= 103,
+	QUERY_GET_WORLDS				= 150,
+	QUERY_GET_ONLINE_CHARACTERS		= 151,
+	QUERY_GET_KILL_STATISTICS		= 152,
 };
 
 enum ConnectionState: int {
@@ -664,26 +658,25 @@ void ProcessLoadPlayersQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessExcludeFromAuctionsQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessCancelHouseTransferQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessLoadWorldConfigQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessGetKeptCharactersQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessGetDeletedCharactersQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessDeleteOldCharacterQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessGetHiddenCharactersQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessCreateHighscoresQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessCreateCensusQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessCreateKillStatisticsQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessGetPlayersOnlineQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessCreateAccountQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessCreateCharacterQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessGetAccountSummaryQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessGetCharacterProfileQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessGetWorldsQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessGetServerLoadQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessInsertPaymentDataOldQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessAddPaymentOldQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessCancelPaymentOldQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessInsertPaymentDataNewQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessAddPaymentNewQuery(TConnection *Connection, TReadBuffer *Buffer);
-void ProcessCancelPaymentNewQuery(TConnection *Connection, TReadBuffer *Buffer);
+void ProcessGetOnlineCharactersQuery(TConnection *Connection, TReadBuffer *Buffer);
 void ProcessConnectionQuery(TConnection *Connection);
 
 // database.cc
 //==============================================================================
+struct TWorld{
+	char Name[30];
+	int Type;
+	int NumPlayers;
+	int MaxPlayers;
+	int OnlineRecord;
+	int OnlineRecordTimestamp;
+};
+
 struct TWorldConfig{
 	int Type;
 	int RebootTime;
@@ -695,7 +688,7 @@ struct TWorldConfig{
 	int PremiumNewbieBuffer;
 };
 
-struct TAccountData{
+struct TAccount{
 	int AccountID;
 	char Email[100];
 	uint8 Auth[64];
@@ -709,14 +702,23 @@ struct TAccountBuddy{
 	char Name[30];
 };
 
-struct TCharacterLoginData{
+struct TCharacterEndpoint{
 	char Name[30];
 	char WorldName[30];
 	int WorldAddress;
 	int WorldPort;
 };
 
-struct TCharacterData{
+struct TCharacterSummary{
+	char Name[30];
+	char World[30];
+	int Level;
+	char Profession[30];
+	bool Online;
+	bool Deleted;
+};
+
+struct TCharacterLoginData{
 	int WorldID;
 	int CharacterID;
 	int AccountID;
@@ -725,6 +727,22 @@ struct TCharacterData{
 	char Guild[30];
 	char Rank[30];
 	char Title[30];
+	bool Deleted;
+};
+
+struct TCharacterProfile{
+	char Name[30];
+	char World[30];
+	int Sex;
+	char Guild[30];
+	char Rank[30];
+	char Title[30];
+	int Level;
+	char Profession[30];
+	char Residence[30];
+	int LastLogin;
+	int PremiumDays;
+	bool Online;
 	bool Deleted;
 };
 
@@ -823,14 +841,23 @@ public:
 
 // NOTE(fusion): Primary tables.
 int GetWorldID(const char *WorldName);
+bool GetWorlds(DynamicArray<TWorld> *Worlds);
 bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig);
-bool GetAccountData(int AccountID, TAccountData *Account);
+bool AccountExists(int AccountID, const char *Email);
+bool AccountNumberExists(int AccountID);
+bool AccountEmailExists(const char *Email);
+bool CreateAccount(int AccountID, const char *Email, const uint8 *Auth, int AuthSize);
+bool GetAccountData(int AccountID, TAccount *Account);
 int GetAccountOnlineCharacters(int AccountID);
 bool IsCharacterOnline(int CharacterID);
 bool ActivatePendingPremiumDays(int AccountID);
-bool GetCharacterList(int AccountID, DynamicArray<TCharacterLoginData> *Characters);
+bool GetCharacterEndpoints(int AccountID, DynamicArray<TCharacterEndpoint> *Characters);
+bool GetCharacterSummaries(int AccountID, DynamicArray<TCharacterSummary> *Characters);
+bool CharacterNameExists(const char *Name);
+bool CreateCharacter(int WorldID, int AccountID, const char *Name, int Sex);
 int GetCharacterID(int WorldID, const char *CharacterName);
-bool GetCharacterData(const char *CharacterName, TCharacterData *Character);
+bool GetCharacterLoginData(const char *CharacterName, TCharacterLoginData *Character);
+bool GetCharacterProfile(const char *CharacterName, TCharacterProfile *Character);
 bool GetCharacterRight(int CharacterID, const char *Right);
 bool GetCharacterRights(int CharacterID, DynamicArray<TCharacterRight> *Rights);
 bool GetGuildLeaderStatus(int WorldID, int CharacterID);
@@ -849,8 +876,8 @@ bool DeleteBuddy(int WorldID, int AccountID, int BuddyID);
 bool GetBuddies(int WorldID, int AccountID, DynamicArray<TAccountBuddy> *Buddies);
 bool GetWorldInvitation(int WorldID, int CharacterID);
 bool InsertLoginAttempt(int AccountID, int IPAddress, bool Failed);
-int GetAccountLoginAttempts(int AccountID, int TimeWindow);
-int GetIPAddressLoginAttempts(int IPAddress, int TimeWindow);
+int GetAccountFailedLoginAttempts(int AccountID, int TimeWindow);
+int GetIPAddressFailedLoginAttempts(int IPAddress, int TimeWindow);
 
 // NOTE(fusion): House tables.
 bool FinishHouseAuctions(int WorldID, DynamicArray<THouseAuction> *Auctions);
@@ -889,7 +916,9 @@ bool InsertReportedStatement(int WorldID, TStatement *Statement, int BanishmentI
 		int ReporterID, const char *Reason, const char *Comment);
 
 // NOTE(fusion): Info tables.
+bool GetKillStatistics(int WorldID, DynamicArray<TKillStatistics> *Stats);
 bool MergeKillStatistics(int WorldID, int NumStats, TKillStatistics *Stats);
+bool GetOnlineCharacters(int WorldID, DynamicArray<TOnlineCharacter> *Characters);
 bool DeleteOnlineCharacters(int WorldID);
 bool InsertOnlineCharacters(int WorldID, int NumCharacters, TOnlineCharacter *Characters);
 bool CheckOnlineRecord(int WorldID, int NumCharacters, bool *NewRecord);
@@ -909,6 +938,7 @@ void ExitDatabase(void);
 //==============================================================================
 void SHA256(const uint8 *Input, int InputBytes, uint8 *Digest);
 bool TestPassword(const uint8 *Auth, int AuthSize, const char *Password);
+bool GenerateAuth(const char *Password, uint8 *Auth, int AuthSize);
 bool CheckSHA256(void);
 
 #endif //TIBIA_QUERYMANAGER_HH_

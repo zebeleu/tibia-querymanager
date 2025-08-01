@@ -525,59 +525,13 @@ void ProcessLoginQuery(TConnection *Connection, TReadBuffer *Buffer){
 	SendQueryStatusOk(Connection);
 }
 
-// TODO(fusion): This might be replaced with some `LOGIN_WEB` query.
-void ProcessCheckAccountPasswordQuery(TConnection *Connection, TReadBuffer *Buffer){
-	char Password[30];
-	char IPString[16];
-	int AccountID = (int)Buffer->Read32();
-	Buffer->ReadString(Password, sizeof(Password));
-	Buffer->ReadString(IPString, sizeof(IPString));
-
-	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
-		SendQueryStatusFailed(Connection);
-		return;
-	}
-
-	// TODO(fusion): This query may return errors 1-4 but their meaning is not
-	// clear, since there is no explicit use of it.
-	TAccountData Account;
-	if(!GetAccountData(AccountID, &Account)){
-		SendQueryStatusFailed(Connection);
-		return;
-	}
-
-	if(Account.AccountID == 0){
-		SendQueryStatusError(Connection, 1);
-		return;
-	}
-
-	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
-		SendQueryStatusError(Connection, 2);
-		return;
-	}
-
-	if(IsAccountBanished(Account.AccountID)){
-		SendQueryStatusError(Connection, 3);
-		return;
-	}
-
-	if(IsIPBanished(IPAddress)){
-		SendQueryStatusError(Connection, 4);
-		return;
-	}
-
-	SendQueryStatusOk(Connection);
-}
-
-int LoginAccountTransaction(int AccountID, const char *Password, int IPAddress,
-		DynamicArray<TCharacterLoginData> *Characters, int *PremiumDays){
-	TransactionScope Tx("LoginAccount");
+static int CheckAccountPasswordTransaction(int AccountID, const char *Password, int IPAddress){
+	TransactionScope Tx("CheckAccountPassword");
 	if(!Tx.Begin()){
 		return -1;
 	}
 
-	TAccountData Account;
+	TAccount Account;
 	if(!GetAccountData(AccountID, &Account)){
 		return -1;
 	}
@@ -590,11 +544,71 @@ int LoginAccountTransaction(int AccountID, const char *Password, int IPAddress,
 		return 2;
 	}
 
-	if(GetAccountLoginAttempts(Account.AccountID, 5 * 60) > 10){
+	if(GetAccountFailedLoginAttempts(Account.AccountID, 5 * 60) > 10){
 		return 3;
 	}
 
-	if(GetIPAddressLoginAttempts(IPAddress, 30 * 60) > 15){
+	if(GetIPAddressFailedLoginAttempts(IPAddress, 30 * 60) > 20){
+		return 4;
+	}
+
+	if(!Tx.Commit()){
+		return -1;
+	}
+
+	return 0;
+}
+
+void ProcessCheckAccountPasswordQuery(TConnection *Connection, TReadBuffer *Buffer){
+	char Password[30];
+	char IPString[16];
+	int AccountID = (int)Buffer->Read32();
+	Buffer->ReadString(Password, sizeof(Password));
+	Buffer->ReadString(IPString, sizeof(IPString));
+
+	int IPAddress = 0;
+	if(!ParseIPAddress(IPString, &IPAddress)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	// NOTE(fusion): Similar to `ProcessLoginAccountQuery`.
+	int Result = CheckAccountPasswordTransaction(AccountID, Password, IPAddress);
+	InsertLoginAttempt(AccountID, IPAddress, (Result != 0));
+	if(Result == -1){
+		SendQueryStatusFailed(Connection);
+	}else if(Result != 0){
+		SendQueryStatusError(Connection, Result);
+	}else{
+		SendQueryStatusOk(Connection);
+	}
+}
+
+int LoginAccountTransaction(int AccountID, const char *Password, int IPAddress,
+		DynamicArray<TCharacterEndpoint> *Characters, int *PremiumDays){
+	TransactionScope Tx("LoginAccount");
+	if(!Tx.Begin()){
+		return -1;
+	}
+
+	TAccount Account;
+	if(!GetAccountData(AccountID, &Account)){
+		return -1;
+	}
+
+	if(Account.AccountID == 0){
+		return 1;
+	}
+
+	if(!TestPassword(Account.Auth, sizeof(Account.Auth), Password)){
+		return 2;
+	}
+
+	if(GetAccountFailedLoginAttempts(Account.AccountID, 5 * 60) > 10){
+		return 3;
+	}
+
+	if(GetIPAddressFailedLoginAttempts(IPAddress, 30 * 60) > 20){
 		return 4;
 	}
 
@@ -606,7 +620,7 @@ int LoginAccountTransaction(int AccountID, const char *Password, int IPAddress,
 		return 6;
 	}
 
-	if(!GetCharacterList(Account.AccountID, Characters)){
+	if(!GetCharacterEndpoints(Account.AccountID, Characters)){
 		return -1;
 	}
 
@@ -626,13 +640,13 @@ void ProcessLoginAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
 	Buffer->ReadString(IPString, sizeof(IPString));
 
 	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+	if(!ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
 
 	int PremiumDays = 0;
-	DynamicArray<TCharacterLoginData> Characters;
+	DynamicArray<TCharacterEndpoint> Characters;
 	int Result = LoginAccountTransaction(AccountID, Password,
 			IPAddress, &Characters, &PremiumDays);
 
@@ -675,14 +689,14 @@ void ProcessLoginAdminQuery(TConnection *Connection, TReadBuffer *Buffer){
 
 static int LoginGameTransaction(int WorldID, int AccountID, const char *CharacterName,
 		const char *Password, int IPAddress, bool PrivateWorld, bool GamemasterRequired,
-		TCharacterData *Character, DynamicArray<TAccountBuddy> *Buddies,
+		TCharacterLoginData *Character, DynamicArray<TAccountBuddy> *Buddies,
 		DynamicArray<TCharacterRight> *Rights, bool *PremiumAccountActivated){
 	TransactionScope Tx("LoginGame");
 	if(!Tx.Begin()){
 		return -1;
 	}
 
-	if(!GetCharacterData(CharacterName, Character)){
+	if(!GetCharacterLoginData(CharacterName, Character)){
 		return -1;
 	}
 
@@ -704,7 +718,7 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 		}
 	}
 
-	TAccountData Account;
+	TAccount Account;
 	if(!GetAccountData(AccountID, &Account)){
 		return -1;
 	}
@@ -722,11 +736,11 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 		return 6;
 	}
 
-	if(GetAccountLoginAttempts(Account.AccountID, 5 * 60) > 10){
+	if(GetAccountFailedLoginAttempts(Account.AccountID, 5 * 60) > 10){
 		return 7;
 	}
 
-	if(GetIPAddressLoginAttempts(IPAddress, 30 * 60) > 15){
+	if(GetIPAddressFailedLoginAttempts(IPAddress, 30 * 60) > 20){
 		return 9;
 	}
 
@@ -742,7 +756,7 @@ static int LoginGameTransaction(int WorldID, int AccountID, const char *Characte
 		return 12;
 	}
 
-	// TODO(fusion): Probably merge these into a single query?
+	// TODO(fusion): Probably merge these into a single operation?
 	if(!GetCharacterRight(Character->CharacterID, "ALLOW_MULTICLIENT")
 			&& GetAccountOnlineCharacters(Account.AccountID) > 0
 			&& !IsCharacterOnline(Character->CharacterID)){
@@ -806,12 +820,12 @@ void ProcessLoginGameQuery(TConnection *Connection, TReadBuffer *Buffer){
 	bool GamemasterRequired = Buffer->ReadFlag();
 
 	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+	if(!ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
 
-	TCharacterData Character;
+	TCharacterLoginData Character;
 	DynamicArray<TAccountBuddy> Buddies;
 	DynamicArray<TCharacterRight> Rights;
 	bool PremiumAccountActivated = false;
@@ -904,7 +918,7 @@ void ProcessSetNamelockQuery(TConnection *Connection, TReadBuffer *Buffer){
 	Buffer->ReadString(Comment, sizeof(Comment));
 
 	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+	if(!ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -964,7 +978,7 @@ void ProcessBanishAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
 	bool FinalWarning = Buffer->ReadFlag();
 
 	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+	if(!ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -1031,7 +1045,7 @@ void ProcessSetNotationQuery(TConnection *Connection, TReadBuffer *Buffer){
 	Buffer->ReadString(Comment, sizeof(Comment));
 
 	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+	if(!ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -1193,7 +1207,7 @@ void ProcessBanishIPAddressQuery(TConnection *Connection, TReadBuffer *Buffer){
 	Buffer->ReadString(Comment, sizeof(Comment));
 
 	int IPAddress = 0;
-	if(IPString[0] != 0 && !ParseIPAddress(IPString, &IPAddress)){
+	if(!ParseIPAddress(IPString, &IPAddress)){
 		SendQueryStatusFailed(Connection);
 		return;
 	}
@@ -1789,68 +1803,261 @@ void ProcessLoadWorldConfigQuery(TConnection *Connection, TReadBuffer *Buffer){
 	SendResponse(Connection, &WriteBuffer);
 }
 
-void ProcessGetKeptCharactersQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+void ProcessCreateAccountQuery(TConnection *Connection, TReadBuffer *Buffer){
+	// TODO(fusion): We'd ideally want to automatically generate an account number
+	// and return it in case of success but that would also require a more robust
+	// website infrastructure with verification e-mails, etc...
+	char Email[100];
+	char Password[30];
+	int AccountID = (int)Buffer->Read32();
+	Buffer->ReadString(Email, sizeof(Email));
+	Buffer->ReadString(Password, sizeof(Password));
+
+	// NOTE(fusion): Inputs should be checked before hand.
+	if(AccountID <= 0 || StringEmpty(Email) || StringEmpty(Password)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	uint8 Auth[64];
+	if(!GenerateAuth(Password, Auth, sizeof(Auth))){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("CreateAccount");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(AccountNumberExists(AccountID)){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+
+	if(AccountEmailExists(Email)){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	if(!CreateAccount(AccountID, Email, Auth, sizeof(Auth))){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
-void ProcessGetDeletedCharactersQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+void ProcessCreateCharacterQuery(TConnection *Connection, TReadBuffer *Buffer){
+	char WorldName[30];
+	char CharacterName[30];
+	Buffer->ReadString(WorldName, sizeof(WorldName));
+	int AccountID = (int)Buffer->Read32();
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
+	int Sex = Buffer->Read8();
+
+	// NOTE(fusion): Inputs should be checked before hand.
+	if(AccountID <= 0 || (Sex != 1 && Sex != 2)
+			|| StringEmpty(WorldName)
+			|| StringEmpty(CharacterName)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TransactionScope Tx("CreateCharacter");
+	if(!Tx.Begin()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	int WorldID = GetWorldID(WorldName);
+	if(WorldID == 0){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
+
+	if(!AccountNumberExists(AccountID)){
+		SendQueryStatusError(Connection, 2);
+		return;
+	}
+
+	if(CharacterNameExists(CharacterName)){
+		SendQueryStatusError(Connection, 3);
+		return;
+	}
+
+	if(!CreateCharacter(WorldID, AccountID, CharacterName, Sex)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(!Tx.Commit()){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	SendQueryStatusOk(Connection);
 }
 
-void ProcessDeleteOldCharacterQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+void ProcessGetAccountSummaryQuery(TConnection *Connection, TReadBuffer *Buffer){
+	int AccountID = (int)Buffer->Read32();
+
+	if(AccountID <= 0){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TAccount Account;
+	if(!GetAccountData(AccountID, &Account)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	if(Account.AccountID != AccountID){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<TCharacterSummary> Characters;
+	if(!GetCharacterSummaries(AccountID, &Characters)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.WriteString(Account.Email);
+	WriteBuffer.Write16((uint16)Account.PremiumDays);
+	WriteBuffer.Write16((uint16)Account.PendingPremiumDays);
+	WriteBuffer.WriteFlag(Account.Deleted);
+	int NumCharacters = std::min<int>(Characters.Length(), UINT8_MAX);
+	WriteBuffer.Write8((uint8)NumCharacters);
+	for(int i = 0; i < NumCharacters; i += 1){
+		WriteBuffer.WriteString(Characters[i].Name);
+		WriteBuffer.WriteString(Characters[i].World);
+		WriteBuffer.Write16((uint16)Characters[i].Level);
+		WriteBuffer.WriteString(Characters[i].Profession);
+		WriteBuffer.WriteFlag(Characters[i].Online);
+		WriteBuffer.WriteFlag(Characters[i].Deleted);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
-void ProcessGetHiddenCharactersQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+void ProcessGetCharacterProfileQuery(TConnection *Connection, TReadBuffer *Buffer){
+	char CharacterName[30];
+	Buffer->ReadString(CharacterName, sizeof(CharacterName));
 
-void ProcessCreateHighscoresQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+	if(StringEmpty(CharacterName)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
 
-void ProcessCreateCensusQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+	TCharacterProfile Character;
+	if(!GetCharacterProfile(CharacterName, &Character)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
 
-void ProcessCreateKillStatisticsQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+	if(!StringEqCI(Character.Name, CharacterName)){
+		SendQueryStatusError(Connection, 1);
+		return;
+	}
 
-void ProcessGetPlayersOnlineQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	WriteBuffer.WriteString(Character.Name);
+	WriteBuffer.WriteString(Character.World);
+	WriteBuffer.Write8((uint8)Character.Sex);
+	WriteBuffer.WriteString(Character.Guild);
+	WriteBuffer.WriteString(Character.Rank);
+	WriteBuffer.WriteString(Character.Title);
+	WriteBuffer.Write16((uint16)Character.Level);
+	WriteBuffer.WriteString(Character.Profession);
+	WriteBuffer.WriteString(Character.Residence);
+	WriteBuffer.Write32((uint32)Character.LastLogin);
+	WriteBuffer.Write16((uint16)Character.PremiumDays);
+	WriteBuffer.WriteFlag(Character.Online);
+	WriteBuffer.WriteFlag(Character.Deleted);
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessGetWorldsQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	DynamicArray<TWorld> Worlds;
+	if(!GetWorlds(&Worlds)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumWorlds = std::min<int>(Worlds.Length(), UINT8_MAX);
+	WriteBuffer.Write8((uint8)NumWorlds);
+	for(int i = 0; i < NumWorlds; i += 1){
+		WriteBuffer.WriteString(Worlds[i].Name);
+		WriteBuffer.Write8((uint8)Worlds[i].Type);
+		WriteBuffer.Write16((uint16)Worlds[i].NumPlayers);
+		WriteBuffer.Write16((uint16)Worlds[i].MaxPlayers);
+		WriteBuffer.Write16((uint16)Worlds[i].OnlineRecord);
+		WriteBuffer.Write32((uint32)Worlds[i].OnlineRecordTimestamp);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
-void ProcessGetServerLoadQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+void ProcessGetOnlineCharactersQuery(TConnection *Connection, TReadBuffer *Buffer){
+	char WorldName[30];
+	Buffer->ReadString(WorldName, sizeof(WorldName));
+
+	int WorldID = GetWorldID(WorldName);
+	if(WorldID == 0){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	DynamicArray<TOnlineCharacter> Characters;
+	if(!GetOnlineCharacters(WorldID, &Characters)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
+
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumCharacters = std::min<int>(Characters.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumCharacters);
+	for(int i = 0; i < NumCharacters; i += 1){
+		WriteBuffer.WriteString(Characters[i].Name);
+		WriteBuffer.Write16((uint16)Characters[i].Level);
+		WriteBuffer.WriteString(Characters[i].Profession);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
-void ProcessInsertPaymentDataOldQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+void ProcessGetKillStatisticsQuery(TConnection *Connection, TReadBuffer *Buffer){
+	char WorldName[30];
+	Buffer->ReadString(WorldName, sizeof(WorldName));
 
-void ProcessAddPaymentOldQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+	int WorldID = GetWorldID(WorldName);
+	if(WorldID == 0){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
 
-void ProcessCancelPaymentOldQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
+	DynamicArray<TKillStatistics> Stats;
+	if(!GetKillStatistics(WorldID, &Stats)){
+		SendQueryStatusFailed(Connection);
+		return;
+	}
 
-void ProcessInsertPaymentDataNewQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
-
-void ProcessAddPaymentNewQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
-}
-
-void ProcessCancelPaymentNewQuery(TConnection *Connection, TReadBuffer *Buffer){
-	SendQueryStatusFailed(Connection);
+	TWriteBuffer WriteBuffer = PrepareResponse(Connection, QUERY_STATUS_OK);
+	int NumStats = std::min<int>(Stats.Length(), UINT16_MAX);
+	WriteBuffer.Write16((uint16)NumStats);
+	for(int i = 0; i < NumStats; i += 1){
+		WriteBuffer.WriteString(Stats[i].RaceName);
+		WriteBuffer.Write32((uint32)Stats[i].PlayersKilled);
+		WriteBuffer.Write32((uint32)Stats[i].TimesKilled);
+	}
+	SendResponse(Connection, &WriteBuffer);
 }
 
 void ProcessConnectionQuery(TConnection *Connection){
@@ -1906,22 +2113,13 @@ void ProcessConnectionQuery(TConnection *Connection){
 		case QUERY_EXCLUDE_FROM_AUCTIONS:		ProcessExcludeFromAuctionsQuery(Connection, &Buffer); break;
 		case QUERY_CANCEL_HOUSE_TRANSFER:		ProcessCancelHouseTransferQuery(Connection, &Buffer); break;
 		case QUERY_LOAD_WORLD_CONFIG:			ProcessLoadWorldConfigQuery(Connection, &Buffer); break;
-		case QUERY_GET_KEPT_CHARACTERS:			ProcessGetKeptCharactersQuery(Connection, &Buffer); break;
-		case QUERY_GET_DELETED_CHARACTERS:		ProcessGetDeletedCharactersQuery(Connection, &Buffer); break;
-		case QUERY_DELETE_OLD_CHARACTER:		ProcessDeleteOldCharacterQuery(Connection, &Buffer); break;
-		case QUERY_GET_HIDDEN_CHARACTERS:		ProcessGetHiddenCharactersQuery(Connection, &Buffer); break;
-		case QUERY_CREATE_HIGHSCORES:			ProcessCreateHighscoresQuery(Connection, &Buffer); break;
-		case QUERY_CREATE_CENSUS:				ProcessCreateCensusQuery(Connection, &Buffer); break;
-		case QUERY_CREATE_KILL_STATISTICS:		ProcessCreateKillStatisticsQuery(Connection, &Buffer); break;
-		case QUERY_GET_PLAYERS_ONLINE:			ProcessGetPlayersOnlineQuery(Connection, &Buffer); break;
+		case QUERY_CREATE_ACCOUNT:				ProcessCreateAccountQuery(Connection, &Buffer); break;
+		case QUERY_CREATE_CHARACTER:			ProcessCreateCharacterQuery(Connection, &Buffer); break;
+		case QUERY_GET_ACCOUNT_SUMMARY:			ProcessGetAccountSummaryQuery(Connection, &Buffer); break;
+		case QUERY_GET_CHARACTER_PROFILE:		ProcessGetCharacterProfileQuery(Connection, &Buffer); break;
 		case QUERY_GET_WORLDS:					ProcessGetWorldsQuery(Connection, &Buffer); break;
-		case QUERY_GET_SERVER_LOAD:				ProcessGetServerLoadQuery(Connection, &Buffer); break;
-		case QUERY_INSERT_PAYMENT_DATA_OLD:		ProcessInsertPaymentDataOldQuery(Connection, &Buffer); break;
-		case QUERY_ADD_PAYMENT_OLD:				ProcessAddPaymentOldQuery(Connection, &Buffer); break;
-		case QUERY_CANCEL_PAYMENT_OLD:			ProcessCancelPaymentOldQuery(Connection, &Buffer); break;
-		case QUERY_INSERT_PAYMENT_DATA_NEW:		ProcessInsertPaymentDataNewQuery(Connection, &Buffer); break;
-		case QUERY_ADD_PAYMENT_NEW:				ProcessAddPaymentNewQuery(Connection, &Buffer); break;
-		case QUERY_CANCEL_PAYMENT_NEW:			ProcessCancelPaymentNewQuery(Connection, &Buffer); break;
+		case QUERY_GET_ONLINE_CHARACTERS:		ProcessGetOnlineCharactersQuery(Connection, &Buffer); break;
+		case QUERY_GET_KILL_STATISTICS:			ProcessGetKillStatisticsQuery(Connection, &Buffer); break;
 		default:{
 			LOG_ERR("Unknown query %d from %s", Query, Connection->RemoteAddress);
 			SendQueryStatusFailed(Connection);

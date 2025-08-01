@@ -4,6 +4,7 @@
 #if OS_LINUX
 #	include <errno.h>
 #	include <signal.h>
+#	include <sys/random.h>
 #else
 #	error "Operating system not currently supported."
 #endif
@@ -31,7 +32,7 @@ void LogAdd(const char *Prefix, const char *Format, ...){
 	vsnprintf(Entry, sizeof(Entry), Format, ap);
 	va_end(ap);
 
-	if(Entry[0] != 0){
+	if(!StringEmpty(Entry)){
 		struct tm LocalTime = GetLocalTime(time(NULL));
 		fprintf(stdout, "%04d/%02d/%02d %02d:%02d:%02d [%s] %s\n",
 				LocalTime.tm_year + 1900, LocalTime.tm_mon + 1, LocalTime.tm_mday,
@@ -48,7 +49,7 @@ void LogAddVerbose(const char *Prefix, const char *Function,
 	vsnprintf(Entry, sizeof(Entry), Format, ap);
 	va_end(ap);
 
-	if(Entry[0] != 0){
+	if(!StringEmpty(Entry)){
 		(void)File;
 		(void)Line;
 		struct tm LocalTime = GetLocalTime(time(NULL));
@@ -92,6 +93,30 @@ void SleepMS(int64 DurationMS){
 	Duration.tv_nsec = (long)((DurationMS % 1000) * 1000000);
 	nanosleep(&Duration, NULL);
 #endif
+}
+
+void CryptoRandom(uint8 *Buffer, int Count){
+#if 0 && OS_WINDOWS
+	// TODO(fusion): Not sure about this one.
+	if(BCryptGenRandom(NULL, Buffer, (ULONG)Count, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != STATUS_SUCCESS){
+		PANIC("Failed to generate cryptographically safe random data.");
+	}
+#else
+	// NOTE(fusion): This shouldn't fail unless the kernel doesn't implement the
+	// required system call, in which case we should have a fallback method. See
+	// `getrandom(2)` for the whole story.
+	if((int)getrandom(Buffer, Count, 0) != Count){
+		PANIC("Failed to generate cryptographically safe random data.");
+	}
+#endif
+}
+
+int RoundSecondsToDays(int Seconds){
+	return (Seconds + 86399) / 86400;
+}
+
+bool StringEmpty(const char *String){
+	return String[0] == 0;
 }
 
 bool StringEq(const char *A, const char *B){
@@ -139,6 +164,11 @@ bool StringCopy(char *Dest, int DestCapacity, const char *Src){
 }
 
 bool ParseIPAddress(const char *String, int *OutAddr){
+	if(StringEmpty(String)){
+		LOG_ERR("Empty IP Address string");
+		return false;
+	}
+
 	int Addr[4];
 	if(sscanf(String, "%d.%d.%d.%d", &Addr[0], &Addr[1], &Addr[2], &Addr[3]) != 4){
 		LOG_ERR("Invalid IP Address format \"%s\"", String);

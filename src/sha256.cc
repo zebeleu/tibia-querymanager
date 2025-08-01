@@ -144,7 +144,24 @@ bool TestPassword(const uint8 *Auth, int AuthSize, const char *Password){
 	for(int i = 0; i < 32; i += 1){
 		Result |= Digest[i] ^ Hash[i];
 	}
-	return Result == 0;;
+	return Result == 0;
+}
+
+bool GenerateAuth(const char *Password, uint8 *Auth, int AuthSize){
+	if(AuthSize != 64){
+		LOG_ERR("Expected 64 bytes buffer for authentication data (got %d)", AuthSize);
+		return false;
+	}
+
+	uint8 *Hash = &Auth[ 0];
+	uint8 *Salt = &Auth[32];
+	CryptoRandom(Salt, 32);
+	SHA256((const uint8*)Password, (int)strlen(Password), Hash);
+	for(int i = 0; i < 32; i += 1){
+		Hash[i] ^= Salt[i];
+	}
+	SHA256(Hash, 32, Hash);
+	return true;
 }
 
 // CheckSHA256

@@ -6,12 +6,16 @@ CREATE TABLE IF NOT EXISTS Worlds (
 	Type INTEGER NOT NULL,
 	RebootTime INTEGER NOT NULL,
 	IPAddress INTEGER NOT NULL,
+	-- TODO(fusion): Have some hostname resolution cache and send the resolved
+	-- addresses instead of hardcoding them into the database.
+	--Host TEXT NOT NULL,
 	Port INTEGER NOT NULL,
 	MaxPlayers INTEGER NOT NULL,
 	PremiumPlayerBuffer INTEGER NOT NULL,
 	MaxNewbies INTEGER NOT NULL,
 	PremiumNewbieBuffer INTEGER NOT NULL,
 	OnlineRecord INTEGER NOT NULL DEFAULT 0,
+	OnlineRecordTimestamp INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (WorldID),
 	UNIQUE (Name)
 );
@@ -274,6 +278,16 @@ INSERT INTO Accounts (AccountID, Email, Auth)
 
 INSERT INTO Characters (WorldID, CharacterID, AccountID, Name, Sex)
 	VALUES (1, 1, 111111, 'Gamemaster', 1), (1, 2, 111111, 'Player', 1);
+
+/*
+-- TODO(fusion): Have group rights instead of adding individual rights to characters?
+ALTER TABLE Characters ADD GroupID INTEGER NOT NULL;
+CREATE TABLE IF NOT EXISTS CharacterRights (
+	GroupID INTEGER NOT NULL,
+	Right TEXT NOT NULL COLLATE NOCASE,
+	PRIMARY KEY(GroupID, Right)
+);
+*/
 
 INSERT INTO CharacterRights (CharacterID, Right)
 	VALUES
