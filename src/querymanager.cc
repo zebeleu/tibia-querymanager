@@ -15,14 +15,20 @@ int  g_ShutdownSignal			= 0;
 // Time
 int  g_MonotonicTimeMS			= 0;
 
-// Config
+// Database Config
 char g_DatabaseFile[1024]		= "tibia.db";
 int  g_MaxCachedStatements		= 100;
+
+// HostCache Config
+int  g_MaxCachedHostNames		= 100;
+int  g_HostNameExpireTime       = 30 * 60 * 1000; // milliseconds
+
+// Connection Config
 int  g_UpdateRate				= 20;
 int  g_QueryManagerPort			= 7174;
 char g_QueryManagerPassword[30]	= "";
 int  g_MaxConnections			= 50;
-int  g_MaxConnectionIdleTime	= 60000;
+int  g_MaxConnectionIdleTime	= 60 * 1000; // milliseconds
 int  g_MaxConnectionPacketSize	= (int)MB(1);
 
 void LogAdd(const char *Prefix, const char *Format, ...){
@@ -370,6 +376,10 @@ bool ReadConfig(const char *FileName){
 			ReadStringConfig(g_DatabaseFile, (int)sizeof(g_DatabaseFile), Val);
 		}else if(StringEqCI(Key, "MaxCachedStatements")){
 			ReadIntegerConfig(&g_MaxCachedStatements, Val);
+		}else if(StringEqCI(Key, "MaxCachedHostNames")){
+			ReadIntegerConfig(&g_MaxCachedHostNames, Val);
+		}else if(StringEqCI(Key, "HostNameExpireTime")){
+			ReadDurationConfig(&g_HostNameExpireTime, Val);
 		}else if(StringEqCI(Key, "UpdateRate")){
 			ReadIntegerConfig(&g_UpdateRate, Val);
 		}else if(StringEqCI(Key, "QueryManagerPort")){
@@ -430,9 +440,12 @@ int main(int argc, const char **argv){
 		return EXIT_FAILURE;
 	}
 
+	atexit(ExitHostCache);
 	atexit(ExitDatabase);
 	atexit(ExitConnections);
-	if(!InitDatabase() || !InitConnections()){
+	if(!InitHostCache()
+			|| !InitDatabase()
+			|| !InitConnections()){
 		return EXIT_FAILURE;
 	}
 

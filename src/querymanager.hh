@@ -78,9 +78,15 @@ typedef size_t usize;
 // Time
 extern int  g_MonotonicTimeMS;
 
-// Config
+// Database Config
 extern char g_DatabaseFile[1024];
 extern int  g_MaxCachedStatements;
+
+// HostCache Config
+extern int  g_MaxCachedHostNames;
+extern int  g_HostNameExpireTime;
+
+// Connection Config
 extern int  g_UpdateRate;
 extern int  g_QueryManagerPort;
 extern char g_QueryManagerPassword[30];
@@ -933,6 +939,12 @@ bool UpgradeDatabaseSchema(int UserVersion);
 bool CheckDatabaseSchema(void);
 bool InitDatabase(void);
 void ExitDatabase(void);
+
+// hostcache.cc
+//==============================================================================
+bool InitHostCache(void);
+void ExitHostCache(void);
+bool ResolveHostName(const char *HostName, int *OutAddr);
 
 // sha256.cc
 //==============================================================================

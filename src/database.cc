@@ -236,7 +236,7 @@ bool GetWorlds(DynamicArray<TWorld> *Worlds){
 bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig){
 	ASSERT(WorldConfig != NULL);
 	sqlite3_stmt *Stmt = PrepareQuery(
-			"SELECT Type, RebootTime, IPAddress, Port, MaxPlayers,"
+			"SELECT Type, RebootTime, Host, Port, MaxPlayers,"
 				" PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer"
 			" FROM Worlds WHERE WorldID = ?1");
 	if(Stmt == NULL){
@@ -255,9 +255,16 @@ bool GetWorldConfig(int WorldID, TWorldConfig *WorldConfig){
 		return false;
 	}
 
+	int IPAddress;
+	const char *HostName = (const char*)sqlite3_column_text(Stmt, 2);
+	if(HostName == NULL || !ResolveHostName(HostName, &IPAddress)){
+		LOG_ERR("Failed to resolve world %d host name \"%s\"", WorldID, HostName);
+		return false;
+	}
+
 	WorldConfig->Type					= sqlite3_column_int(Stmt, 0);
 	WorldConfig->RebootTime				= sqlite3_column_int(Stmt, 1);
-	WorldConfig->IPAddress				= sqlite3_column_int(Stmt, 2);
+	WorldConfig->IPAddress				= IPAddress;
 	WorldConfig->Port					= sqlite3_column_int(Stmt, 3);
 	WorldConfig->MaxPlayers				= sqlite3_column_int(Stmt, 4);
 	WorldConfig->PremiumPlayerBuffer	= sqlite3_column_int(Stmt, 5);
@@ -483,7 +490,7 @@ bool ActivatePendingPremiumDays(int AccountID){
 
 bool GetCharacterEndpoints(int AccountID, DynamicArray<TCharacterEndpoint> *Characters){
 	sqlite3_stmt *Stmt = PrepareQuery(
-			"SELECT C.Name, W.Name, W.IPAddress, W.Port"
+			"SELECT C.Name, W.Name, W.Host, W.Port"
 			" FROM Characters AS C"
 			" INNER JOIN Worlds AS W ON W.WorldID = C.WorldID"
 			" WHERE C.AccountID = ?1");
@@ -499,12 +506,20 @@ bool GetCharacterEndpoints(int AccountID, DynamicArray<TCharacterEndpoint> *Char
 	}
 
 	while(sqlite3_step(Stmt) == SQLITE_ROW){
+		int WorldAddress;
+		const char *CharacterName = (const char*)sqlite3_column_text(Stmt, 0);
+		const char *WorldName = (const char*)sqlite3_column_text(Stmt, 1);
+		const char *HostName = (const char*)sqlite3_column_text(Stmt, 2);
+		if(HostName == NULL || !ResolveHostName(HostName, &WorldAddress)){
+			LOG_ERR("Failed to resolve world \"%s\" host name \"%s\" for character \"%s\"",
+					WorldName, HostName, CharacterName);
+			continue;
+		}
+
 		TCharacterEndpoint Character = {};
-		StringCopy(Character.Name, sizeof(Character.Name),
-				(const char*)sqlite3_column_text(Stmt, 0));
-		StringCopy(Character.WorldName, sizeof(Character.WorldName),
-				(const char*)sqlite3_column_text(Stmt, 1));
-		Character.WorldAddress = sqlite3_column_int(Stmt, 2);
+		StringCopy(Character.Name, sizeof(Character.Name), CharacterName);
+		StringCopy(Character.WorldName, sizeof(Character.WorldName), WorldName);
+		Character.WorldAddress = WorldAddress;
 		Character.WorldPort = sqlite3_column_int(Stmt, 3);
 		Characters->Push(Character);
 	}

@@ -5,10 +5,7 @@ CREATE TABLE IF NOT EXISTS Worlds (
 	Name TEXT NOT NULL COLLATE NOCASE,
 	Type INTEGER NOT NULL,
 	RebootTime INTEGER NOT NULL,
-	IPAddress INTEGER NOT NULL,
-	-- TODO(fusion): Have some hostname resolution cache and send the resolved
-	-- addresses instead of hardcoding them into the database.
-	--Host TEXT NOT NULL,
+	Host TEXT NOT NULL,
 	Port INTEGER NOT NULL,
 	MaxPlayers INTEGER NOT NULL,
 	PremiumPlayerBuffer INTEGER NOT NULL,
@@ -268,9 +265,9 @@ CREATE TABLE IF NOT EXISTS OnlineCharacters (
 
 -- REMOVE(fusion): Testing Data.
 --==============================================================================
-INSERT INTO Worlds (WorldID, Name, Type, RebootTime, IPAddress, Port, MaxPlayers,
+INSERT INTO Worlds (WorldID, Name, Type, RebootTime, Host, Port, MaxPlayers,
 					PremiumPlayerBuffer, MaxNewbies, PremiumNewbieBuffer)
-	VALUES (1, 'Zanera', 0, 5, 0x7F000001, 7172, 1000, 100, 300, 100);
+	VALUES (1, 'Zanera', 0, 5, 'localhost', 7172, 1000, 100, 300, 100);
 
 -- 111111/tibia
 INSERT INTO Accounts (AccountID, Email, Auth)
