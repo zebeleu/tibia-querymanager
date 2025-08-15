@@ -2042,7 +2042,7 @@ bool MergeKillStatistics(int WorldID, int NumStats, TKillStatistics *Stats){
 			"INSERT INTO KillStatistics (WorldID, RaceName, TimesKilled, PlayersKilled)"
 			" VALUES (?1, ?2, ?3, ?4)"
 			" ON CONFLICT DO UPDATE SET TimesKilled = TimesKilled + Excluded.TimesKilled,"
-									" PlayersKilled = PlayersKilled + Excluded.TimesKilled");
+									" PlayersKilled = PlayersKilled + Excluded.PlayersKilled");
 	if(Stmt == NULL){
 		LOG_ERR("Failed to prepare query");
 		return false;

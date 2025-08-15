@@ -44,6 +44,7 @@ void LogAdd(const char *Prefix, const char *Format, ...){
 				LocalTime.tm_year + 1900, LocalTime.tm_mon + 1, LocalTime.tm_mday,
 				LocalTime.tm_hour, LocalTime.tm_min, LocalTime.tm_sec,
 				Prefix, Entry);
+		fflush(stdout);
 	}
 }
 
@@ -63,6 +64,7 @@ void LogAddVerbose(const char *Prefix, const char *Function,
 				LocalTime.tm_year + 1900, LocalTime.tm_mon + 1, LocalTime.tm_mday,
 				LocalTime.tm_hour, LocalTime.tm_min, LocalTime.tm_sec,
 				Prefix, Function, Entry);
+		fflush(stdout);
 	}
 }
 

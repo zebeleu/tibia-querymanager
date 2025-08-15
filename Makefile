@@ -10,7 +10,7 @@ LFLAGS = -Wl,-t
 
 DEBUG ?= 0
 ifneq ($(DEBUG), 0)
-	CFLAGS += -g -O0
+	CFLAGS += -g -Og
 else
 	CFLAGS += -O2
 endif

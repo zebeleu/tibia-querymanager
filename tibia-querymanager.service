@@ -1,0 +1,21 @@
+# Basic SYSTEMD service file for the Tibia Query Manager
+
+[Unit]
+Description=Tibia Query Manager
+After=network.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+User=tibia-querymanager
+Group=tibia-querymanager
+ExecStart=/opt/tibia/querymanager/querymanager
+WorkingDirectory=/opt/tibia/querymanager/
+Restart=always
+RestartSec=10
+LimitCORE=infinity
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=%n
