@@ -3,6 +3,10 @@
 [Unit]
 Description=Tibia Query Manager
 After=network.target
+# Make sure we attempt to start services depending on the querymanager
+# if we use start/stop instead of restart. It seems there is no way to
+# automate this, although it would be desirable.
+Wants=tibia-login.service tibia-game.service tibia-web.service
 
 [Install]
 WantedBy=multi-user.target

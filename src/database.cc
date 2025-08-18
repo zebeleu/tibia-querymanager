@@ -982,6 +982,7 @@ bool GetCharacterIndexEntries(int WorldID, int MinimumCharacterID,
 		StringCopy(Entries[EntryIndex].Name,
 				sizeof(Entries[EntryIndex].Name),
 				(const char*)sqlite3_column_text(Stmt, 1));
+		EntryIndex += 1;
 	}
 
 	if(sqlite3_errcode(g_Database) != SQLITE_DONE){
