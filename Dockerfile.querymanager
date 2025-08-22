@@ -1,0 +1,78 @@
+# ------------------------------------------------------------------------------
+# Dockerfile for the Tibia 7.7 Query Manager
+#
+# This Dockerfile builds the query manager from source.  The upstream code
+# depends only on a C++11 toolchain and does not require any external
+# libraries.  The `config.cfg` and `sql` directory are copied into the
+# container so that the process can find its configuration and initialise its
+# SQLite database on first run.  The compiled binary is placed under
+# `./build/querymanager` by the Makefile.  The container exposes port 7173,
+# which is the default `QueryManagerPort` specified in `config.cfg`.
+#
+# Usage (from the root of the cloned repository):
+#   docker build -t tibia-querymanager -f Dockerfile.querymanager .
+#   docker run --name querymanager -p 7173:7173 -p 7171:7171 tibia-querymanager
+
+FROM debian:stable-slim AS build
+
+# Install a minimal build environment.  `build-essential` brings in gcc, g++
+# and make.  We also install `ca-certificates` to allow HTTPS if the user
+# fetches dependencies in the future.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential \
+       ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory inside the container.  Everything will be
+# relative to this path.
+WORKDIR /opt/tibia-querymanager
+
+# Copy the entire repository into the image.  This includes the source code
+# (`src`), the SQL migration files (`sql`), configuration (`config.cfg`) and
+# service definitions.  The `.dockerignore` file can be used in the future
+# to reduce context size but is not necessary here.
+COPY . ./
+
+# Build the query manager.  The Makefile will create a `build` directory
+# containing the `querymanager` binary.  We use the default release build; to
+# build in debug mode pass `--build-arg DEBUG=1` and the Makefile will
+# respect the `DEBUG` environment variable.
+ARG DEBUG=0
+RUN make -j"$(nproc)" DEBUG=$DEBUG
+
+# Create a lightweight runtime image.  Copy only the compiled binary, SQL
+# scripts and configuration into the final stage.  This results in a much
+# smaller final image without the build tools.
+FROM debian:stable-slim AS runtime
+
+# Install the libraries required by the compiled binary.  The query
+# manager links only against glibc (provided by the base image) so we do
+# not need any extra runtime packages.  We still install ca-certificates
+# to maintain good TLS defaults.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sqlite3 \
+       ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Work in the same directory layout as in the build stage.
+WORKDIR /opt/tibia-querymanager
+
+# Copy the minimal set of artefacts from the builder.  We copy the binary
+# into `./build/querymanager`, the configuration file, and the SQL
+# migration directory.  The SQL files are used at runtime to initialise
+# and upgrade the SQLite database.
+COPY --from=build /opt/tibia-querymanager/build/querymanager ./build/
+COPY --from=build /opt/tibia-querymanager/config.cfg ./
+COPY --from=build /opt/tibia-querymanager/sql ./sql
+
+# Expose the default port defined in `config.cfg`.  Only local processes
+# connecting over loopback can talk to this service, however mapping this
+# port allows users to bind it on the host when running with the host
+# network namespace or sharing a network namespace with another container.
+EXPOSE 7173
+
+# By default execute the query manager.  The working directory must be
+# where `config.cfg` resides so that the application picks up its
+# configuration and the `sql/` directory.
+CMD ["./build/querymanager"]
