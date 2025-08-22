@@ -11,7 +11,7 @@
 #
 # Usage (from the root of the cloned repository):
 #   docker build -t tibia-querymanager -f Dockerfile.querymanager .
-#   docker run --name querymanager -p 7173:7173 -p 7171:7171 tibia-querymanager
+#   docker run -d --name querymanager -p 7173:7173 -p 7171:7171 tibia-querymanager
 
 FROM debian:stable-slim AS build
 
