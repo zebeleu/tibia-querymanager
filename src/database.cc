@@ -2410,6 +2410,14 @@ bool InitDatabase(void){
 		return false;
 	}
 
+	if(sqlite3_db_readonly(g_Database, NULL)){
+		LOG_ERR("Failed to open database file \"%s\" with WRITE PERMISSIONS."
+				" Make sure the file has the appropriate permissions and is"
+				" owned by the same user running the query manager.",
+				g_DatabaseFile);
+		return false;
+	}
+
 	if(!InitStatementCache()){
 		LOG_ERR("Failed to initialize statement cache");
 		return false;
